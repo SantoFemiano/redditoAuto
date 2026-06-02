@@ -71,7 +71,7 @@ public class OpenApiConfig {
 
     private List<Server> buildServers() {
         Server local = new Server()
-            .url("http://localhost:8080")
+            .url("http://localhost:8081")
             .description("Sviluppo locale");
 
         Server prod = new Server()
@@ -80,4 +80,7 @@ public class OpenApiConfig {
 
         return List.of(local, prod);
     }
+
+
+
 }
