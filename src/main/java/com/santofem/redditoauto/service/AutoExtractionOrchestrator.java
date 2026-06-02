@@ -20,6 +20,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.function.Supplier;
 
 /**
  * Orchestratore del flusso completo di estrazione dati auto.
@@ -77,12 +78,10 @@ public class AutoExtractionOrchestrator {
         String fonteDati;
 
         if (testoOpt.isPresent()) {
-            // 3a. Scraping OK: AI estrae dal testo
             log.info("[Orchestratore] Scraping riuscito, invio testo all'AI extractor");
             dto = callAiSafely(() -> aiExtractor.extractCarData(testoOpt.get()));
             fonteDati = "scraping:" + marca + ":" + modello + ":" + anno;
         } else {
-            // 3b. Fallback: AI genera direttamente
             log.warn("[Orchestratore] Scraping fallito. Fallback AI-direct per {} {} {} {}",
                 marca, modello, motore, anno);
             dto = callAiSafely(() -> aiDirectProvider.getCarData(
@@ -91,6 +90,13 @@ public class AutoExtractionOrchestrator {
         }
 
         return persistiDto(dto, fonteDati);
+    }
+
+    @Transactional
+    public MotorizzazioneResponseDTO estraiDaUrl(String url, String fonteDati) {
+        log.info("[Orchestratore] Estrazione da URL: {}", url);
+        throw new UnsupportedOperationException(
+            "estraiDaUrl() non ancora implementato. Usa estraiDaParametri() invece.");
     }
 
     @Transactional
@@ -109,7 +115,7 @@ public class AutoExtractionOrchestrator {
      * (dopo aver esaurito i retry), propaga GeminiUnavailableException
      * invece di tornare un DTO vuoto con null ovunque.
      */
-    private CarDataDTO callAiSafely(java.util.function.Supplier<CarDataDTO> aiCall) {
+    private CarDataDTO callAiSafely(Supplier<CarDataDTO> aiCall) {
         try {
             return aiCall.get();
         } catch (RuntimeException ex) {
@@ -119,7 +125,6 @@ public class AutoExtractionOrchestrator {
                 throw new GeminiUnavailableException(
                     "Il servizio AI è temporaneamente sovraccarico. Riprova tra qualche secondo.", ex);
             }
-            // Per altri errori AI (400, 401, ecc.) rilancia così com'è
             log.error("[AI] Errore chiamata Gemini: {}", msg);
             throw ex;
         }
