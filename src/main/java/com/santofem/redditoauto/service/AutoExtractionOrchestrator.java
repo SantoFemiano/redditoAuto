@@ -28,6 +28,10 @@ import java.util.function.Supplier;
 @Slf4j
 public class AutoExtractionOrchestrator {
 
+    /** Numero massimo di caratteri del testo scraping inviato a Gemini.
+     *  Valori più alti aumentano il rischio di output token troncati (MalformedJsonException). */
+    private static final int MAX_SCRAPING_CHARS = 3500;
+
     private final WebScraper webScraper;
     private final AiCarDataExtractor aiExtractor;
     private final AiDirectDataProvider aiDirectProvider;
@@ -93,10 +97,14 @@ public class AutoExtractionOrchestrator {
                     anno, annoEffettivo);
             }
 
-            log.info("[Orchestratore] Scraping riuscito ({} chars), invio all'AI extractor",
-                scraperResult.testo().length());
+            // Tronca il testo per evitare che Gemini superi il limite di output token
+            // e produca JSON troncato (MalformedJsonException su $.nomeMotore e simili)
+            String testoScraping = truncaTestoScraping(scraperResult.testo());
+
+            log.info("[Orchestratore] Scraping riuscito ({} chars → {} chars dopo troncamento), invio all'AI extractor",
+                scraperResult.testo().length(), testoScraping.length());
             CarDataDTO raw = callAiSafely(() -> aiExtractor.extractCarData(
-                marca, modello, motore, String.valueOf(annoEffettivo), scraperResult.testo()));
+                marca, modello, motore, String.valueOf(annoEffettivo), testoScraping));
             dto = overrideIdentita(raw, marca, modello, motore, annoEffettivo);
             fonteDati = "scraping:auto-data.net:" + marca + ":" + modello + ":" + annoEffettivo;
         } else {
@@ -137,7 +145,7 @@ public class AutoExtractionOrchestrator {
             .orElseThrow(() ->
                 new IllegalStateException("Impossibile estrarre testo dall'URL: " + url));
         CarDataDTO dto = callAiSafely(() -> aiExtractor.extractCarData(
-            "sconosciuta", "sconosciuto", "sconosciuto", "0", testo));
+            "sconosciuta", "sconosciuto", "sconosciuto", "0", truncaTestoScraping(testo)));
         return persistiDto(dto, fonteDati);
     }
 
@@ -148,7 +156,7 @@ public class AutoExtractionOrchestrator {
     @Transactional
     public MotorizzazioneResponseDTO estraiDaTesto(String testoGrezzo, String fonteDati) {
         CarDataDTO dto = callAiSafely(() -> aiExtractor.extractCarData(
-            "sconosciuta", "sconosciuto", "sconosciuto", "0", testoGrezzo));
+            "sconosciuta", "sconosciuto", "sconosciuto", "0", truncaTestoScraping(testoGrezzo)));
         return persistiDto(dto, fonteDati);
     }
 
@@ -204,6 +212,29 @@ public class AutoExtractionOrchestrator {
     }
 
     // -----------------------------------------------
+    // TRONCAMENTO TESTO SCRAPING
+    // -----------------------------------------------
+
+    /**
+     * Tronca il testo di scraping a {@link #MAX_SCRAPING_CHARS} caratteri.
+     * <p>
+     * Motivazione: Gemini ha un limite sul numero di token di output. Se il prompt
+     * (testo scraping + istruzioni) è troppo lungo, il modello raggiunge il limite
+     * prima di chiudere il JSON, producendo un {@code MalformedJsonException}
+     * del tipo "Unterminated string at path $.nomeMotore".
+     * Il testo di auto-data.net contiene già tutti i dati tecnici rilevanti
+     * nelle prime sezioni, quindi il troncamento non causa perdita di informazioni.
+     * </p>
+     */
+    private String truncaTestoScraping(String testo) {
+        if (testo == null) return "";
+        if (testo.length() <= MAX_SCRAPING_CHARS) return testo;
+        log.debug("[Orchestratore] Testo scraping troncato da {} a {} chars per evitare MalformedJson da Gemini",
+            testo.length(), MAX_SCRAPING_CHARS);
+        return testo.substring(0, MAX_SCRAPING_CHARS);
+    }
+
+    // -----------------------------------------------
     // WRAPPER AI
     // -----------------------------------------------
 
@@ -216,6 +247,16 @@ public class AutoExtractionOrchestrator {
                 log.error("[AI] Gemini 503 dopo tutti i retry: {}", msg);
                 throw new GeminiUnavailableException(
                     "Il servizio AI e' temporaneamente sovraccarico. Riprova tra qualche secondo.", ex);
+            }
+            // MalformedJsonException: Gemini ha restituito JSON troncato.
+            // Segnala il problema con un messaggio chiaro invece di propagare
+            // un JsonSyntaxException incomprensibile al chiamante.
+            if (msg.contains("MalformedJson") || msg.contains("Unterminated string")
+                    || msg.contains("JsonSyntaxException") || msg.contains("JsonParseException")) {
+                log.error("[AI] Gemini ha restituito JSON malformato/troncato: {}", msg);
+                throw new GeminiUnavailableException(
+                    "L'AI ha restituito una risposta non valida (JSON troncato). "
+                    + "Questo può accadere con testi molto lunghi. Riprova.", ex);
             }
             log.error("[AI] Errore chiamata Gemini: {}", msg);
             throw ex;
