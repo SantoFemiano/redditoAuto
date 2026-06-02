@@ -1,179 +1,83 @@
 package com.santofem.redditoauto.controller;
 
 import com.santofem.redditoauto.controller.dto.MotorizzazioneResponseDTO;
-import com.santofem.redditoauto.service.MotorizzazioneService;
-import jakarta.persistence.EntityNotFoundException;
+import com.santofem.redditoauto.service.MotorizzazioneQueryService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.List;
+import java.util.Optional;
 
-import static org.mockito.Mockito.*;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 @WebMvcTest(MotorizzazioneController.class)
 class MotorizzazioneControllerTest {
 
     @Autowired MockMvc mvc;
-    @MockBean  MotorizzazioneService service;
+    @MockitoBean MotorizzazioneQueryService queryService;
 
-    private MotorizzazioneResponseDTO sampleDto(Long id) {
+    private MotorizzazioneResponseDTO sampleDTO() {
         return MotorizzazioneResponseDTO.builder()
-            .id(id)
-            .marca("Toyota")
-            .modello("Yaris")
-            .nomeMotore("1.5 Hybrid")
-            .annoProduzione(2023)
+            .id(1L)
+            .marca("Volkswagen")
+            .modello("Golf")
+            .nomeMotore("2.0 TDI 150CV")
+            .annoProduzione(2022)
             .build();
     }
 
-    // ─── GET /{id} ────────────────────────────────────
-
     @Test
-    @DisplayName("GET /{id} → 200 con id esistente")
-    void getById_found() throws Exception {
-        when(service.findById(5L)).thenReturn(sampleDto(5L));
+    @DisplayName("GET /motorizzazioni/{id} → 200 se esiste")
+    void getById_ok() throws Exception {
+        when(queryService.findById(1L)).thenReturn(Optional.of(sampleDTO()));
 
-        mvc.perform(get("/api/v1/motorizzazioni/5"))
+        mvc.perform(get("/api/v1/motorizzazioni/1"))
             .andExpect(status().isOk())
-            .andExpect(jsonPath("$.id").value(5))
-            .andExpect(jsonPath("$.marca").value("Toyota"));
+            .andExpect(jsonPath("$.marca").value("Volkswagen"))
+            .andExpect(jsonPath("$.nomeMotore").value("2.0 TDI 150CV"));
     }
 
     @Test
-    @DisplayName("GET /{id} → 404 con id inesistente")
+    @DisplayName("GET /motorizzazioni/{id} → 404 se non esiste")
     void getById_notFound() throws Exception {
-        when(service.findById(999L)).thenThrow(new EntityNotFoundException("Non trovata"));
+        when(queryService.findById(99L)).thenReturn(Optional.empty());
 
-        mvc.perform(get("/api/v1/motorizzazioni/999"))
+        mvc.perform(get("/api/v1/motorizzazioni/99"))
             .andExpect(status().isNotFound());
     }
 
-    // ─── GET / (search) ───────────────────────────────
-
     @Test
-    @DisplayName("GET / con parametri → 200 con lista risultati")
-    void search_conParametri() throws Exception {
-        when(service.search("Toyota", "Yaris", 2023))
-            .thenReturn(List.of(sampleDto(1L), sampleDto(2L)));
+    @DisplayName("GET /motorizzazioni/cerca → 200 con lista risultati")
+    void cerca_ok() throws Exception {
+        when(queryService.cerca(anyString(), anyString(), anyInt()))
+            .thenReturn(List.of(sampleDTO()));
 
-        mvc.perform(get("/api/v1/motorizzazioni")
-                .param("marca", "Toyota")
-                .param("modello", "Yaris")
-                .param("anno", "2023"))
+        mvc.perform(get("/api/v1/motorizzazioni/cerca")
+                .param("marca", "Volkswagen")
+                .param("modello", "Golf")
+                .param("anno", "2022"))
             .andExpect(status().isOk())
-            .andExpect(jsonPath("$.length()").value(2));
+            .andExpect(jsonPath("$[0].id").value(1));
     }
 
     @Test
-    @DisplayName("GET / senza parametri → 200 con lista completa")
-    void search_senzaParametri() throws Exception {
-        when(service.search(null, null, null))
-            .thenReturn(List.of(sampleDto(1L)));
+    @DisplayName("GET /motorizzazioni/cerca → 200 con lista vuota")
+    void cerca_listaVuota() throws Exception {
+        when(queryService.cerca(anyString(), anyString(), anyInt()))
+            .thenReturn(List.of());
 
-        mvc.perform(get("/api/v1/motorizzazioni"))
+        mvc.perform(get("/api/v1/motorizzazioni/cerca")
+                .param("marca", "Ferrari")
+                .param("modello", "Testarossa")
+                .param("anno", "1985"))
             .andExpect(status().isOk())
-            .andExpect(jsonPath("$.length()").value(1));
-    }
-
-    @Test
-    @DisplayName("GET / → 200 con lista vuota se nessun risultato")
-    void search_listaVuota() throws Exception {
-        when(service.search(anyString(), any(), any())).thenReturn(List.of());
-
-        mvc.perform(get("/api/v1/motorizzazioni")
-                .param("marca", "Lamborghini"))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.length()").value(0));
-    }
-
-    // ─── GET /autocomplete ────────────────────────────
-
-    @Test
-    @DisplayName("GET /autocomplete?q=golf → 200 con suggerimenti")
-    void autocomplete_conRisultati() throws Exception {
-        when(service.autocomplete("golf"))
-            .thenReturn(List.of(
-                "Volkswagen Golf 2.0 TDI 150CV (2022)",
-                "Volkswagen Golf 1.5 TSI (2021)"
-            ));
-
-        mvc.perform(get("/api/v1/motorizzazioni/autocomplete")
-                .param("q", "golf"))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.length()").value(2))
-            .andExpect(jsonPath("$[0]").value("Volkswagen Golf 2.0 TDI 150CV (2022)"));
-    }
-
-    @Test
-    @DisplayName("GET /autocomplete → 200 con lista vuota se nessun match")
-    void autocomplete_nessunaCorrispondenza() throws Exception {
-        when(service.autocomplete("xyz")).thenReturn(List.of());
-
-        mvc.perform(get("/api/v1/motorizzazioni/autocomplete")
-                .param("q", "xyz"))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.length()").value(0));
-    }
-
-    // ─── GET /modello/{modelloId} ─────────────────────
-
-    @Test
-    @DisplayName("GET /modello/{id} → 200 con lista motorizzazioni")
-    void getByModello_found() throws Exception {
-        when(service.findByModello(3L))
-            .thenReturn(List.of(sampleDto(1L), sampleDto(2L)));
-
-        mvc.perform(get("/api/v1/motorizzazioni/modello/3"))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.length()").value(2));
-    }
-
-    // ─── PATCH /{id}/conferma ─────────────────────────
-
-    @Test
-    @DisplayName("PATCH /{id}/conferma → 200 con dati aggiornati")
-    void conferma_ok() throws Exception {
-        MotorizzazioneResponseDTO confirmed = sampleDto(7L);
-        when(service.confermaManualmente(7L)).thenReturn(confirmed);
-
-        mvc.perform(patch("/api/v1/motorizzazioni/7/conferma"))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.id").value(7));
-    }
-
-    @Test
-    @DisplayName("PATCH /{id}/conferma → 404 se non trovata")
-    void conferma_notFound() throws Exception {
-        when(service.confermaManualmente(99L))
-            .thenThrow(new EntityNotFoundException("Non trovata"));
-
-        mvc.perform(patch("/api/v1/motorizzazioni/99/conferma"))
-            .andExpect(status().isNotFound());
-    }
-
-    // ─── DELETE /{id} ─────────────────────────────────
-
-    @Test
-    @DisplayName("DELETE /{id} → 204 con id esistente")
-    void delete_ok() throws Exception {
-        doNothing().when(service).delete(10L);
-
-        mvc.perform(delete("/api/v1/motorizzazioni/10"))
-            .andExpect(status().isNoContent());
-    }
-
-    @Test
-    @DisplayName("DELETE /{id} → 404 se non trovata")
-    void delete_notFound() throws Exception {
-        doThrow(new EntityNotFoundException("Non trovata")).when(service).delete(99L);
-
-        mvc.perform(delete("/api/v1/motorizzazioni/99"))
-            .andExpect(status().isNotFound());
+            .andExpect(jsonPath("$").isEmpty());
     }
 }

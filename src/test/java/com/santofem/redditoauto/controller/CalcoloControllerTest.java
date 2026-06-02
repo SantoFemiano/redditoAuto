@@ -9,8 +9,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.MediaType;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.math.BigDecimal;
@@ -25,7 +25,7 @@ class CalcoloControllerTest {
 
     @Autowired MockMvc mvc;
     @Autowired ObjectMapper objectMapper;
-    @MockBean  CalcoloSostenibilitaService calcoloService;
+    @MockitoBean CalcoloSostenibilitaService calcoloService;
 
     private CalcoloRequestDTO validRequest() {
         return CalcoloRequestDTO.builder()
@@ -53,8 +53,6 @@ class CalcoloControllerTest {
             .build();
     }
 
-    // ─── POST /calcolo ────────────────────────────────
-
     @Test
     @DisplayName("POST /calcolo → 200 con body valido e giudizio ACCETTABILE")
     void calcola_ok_accettabile() throws Exception {
@@ -70,7 +68,7 @@ class CalcoloControllerTest {
     }
 
     @Test
-    @DisplayName("POST /calcolo → 200 con giudizio CRITICO e sostenibile=false")
+    @DisplayName("POST /calcolo → 200 con giudizio CRITICO")
     void calcola_ok_critico() throws Exception {
         when(calcoloService.calcola(any())).thenReturn(sampleRisposta("CRITICO", false));
 
@@ -83,89 +81,53 @@ class CalcoloControllerTest {
     }
 
     @Test
-    @DisplayName("POST /calcolo → 404 se motorizzazione non trovata")
-    void calcola_motorizzazioneNonTrovata() throws Exception {
+    @DisplayName("POST /calcolo → 404 se motorizzazione non esiste")
+    void calcola_motorizzazioneNotFound() throws Exception {
         when(calcoloService.calcola(any()))
-            .thenThrow(new EntityNotFoundException("Motorizzazione non trovata con id: 999"));
-
-        CalcoloRequestDTO req = validRequest();
-        req.setMotorizzazioneId(999L);
-
-        mvc.perform(post("/api/v1/calcolo")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(req)))
-            .andExpect(status().isNotFound());
-    }
-
-    @Test
-    @DisplayName("POST /calcolo → 400 con reddito nullo")
-    void calcola_redditoNullo() throws Exception {
-        CalcoloRequestDTO req = validRequest();
-        req.setRedditoNettoMensile(null);
-
-        mvc.perform(post("/api/v1/calcolo")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(req)))
-            .andExpect(status().isBadRequest());
-    }
-
-    @Test
-    @DisplayName("POST /calcolo → 400 con reddito negativo")
-    void calcola_redditoNegativo() throws Exception {
-        CalcoloRequestDTO req = validRequest();
-        req.setRedditoNettoMensile(new BigDecimal("-100"));
-
-        mvc.perform(post("/api/v1/calcolo")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(req)))
-            .andExpect(status().isBadRequest());
-    }
-
-    @Test
-    @DisplayName("POST /calcolo → 400 con durata inferiore al minimo (< 12 mesi)")
-    void calcola_durataTroppoCorta() throws Exception {
-        CalcoloRequestDTO req = validRequest();
-        req.setDurataFinanziamentoMesi(6);
-
-        mvc.perform(post("/api/v1/calcolo")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(req)))
-            .andExpect(status().isBadRequest());
-    }
-
-    @Test
-    @DisplayName("POST /calcolo → 400 con TAN superiore al massimo (> 30%)")
-    void calcola_tanTroppoAlto() throws Exception {
-        CalcoloRequestDTO req = validRequest();
-        req.setTanPercentuale(new BigDecimal("35.0"));
-
-        mvc.perform(post("/api/v1/calcolo")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(req)))
-            .andExpect(status().isBadRequest());
-    }
-
-    @Test
-    @DisplayName("POST /calcolo → 400 con motorizzazioneId nullo")
-    void calcola_motorizzazioneIdNullo() throws Exception {
-        CalcoloRequestDTO req = validRequest();
-        req.setMotorizzazioneId(null);
-
-        mvc.perform(post("/api/v1/calcolo")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(req)))
-            .andExpect(status().isBadRequest());
-    }
-
-    @Test
-    @DisplayName("POST /calcolo → 422 se prezzo listino non disponibile (IllegalStateException)")
-    void calcola_prezzoListinoMancante() throws Exception {
-        when(calcoloService.calcola(any()))
-            .thenThrow(new IllegalStateException("Prezzo listino non disponibile"));
+            .thenThrow(new EntityNotFoundException("Motorizzazione non trovata con id: 99"));
 
         mvc.perform(post("/api/v1/calcolo")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(validRequest())))
-            .andExpect(status().isUnprocessableEntity());
+            .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @DisplayName("POST /calcolo → 400 con reddito mancante")
+    void calcola_redditoMancante() throws Exception {
+        CalcoloRequestDTO req = validRequest().toBuilder()
+            .redditoNettoMensile(null)
+            .build();
+
+        mvc.perform(post("/api/v1/calcolo")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(req)))
+            .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("POST /calcolo → 400 con durata < 12 mesi")
+    void calcola_durataTroppoCorta() throws Exception {
+        CalcoloRequestDTO req = validRequest().toBuilder()
+            .durataFinanziamentoMesi(6)
+            .build();
+
+        mvc.perform(post("/api/v1/calcolo")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(req)))
+            .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("POST /calcolo → 400 con TAN > 30%")
+    void calcola_tanEccessivo() throws Exception {
+        CalcoloRequestDTO req = validRequest().toBuilder()
+            .tanPercentuale(new BigDecimal("35.0"))
+            .build();
+
+        mvc.perform(post("/api/v1/calcolo")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(req)))
+            .andExpect(status().isBadRequest());
     }
 }

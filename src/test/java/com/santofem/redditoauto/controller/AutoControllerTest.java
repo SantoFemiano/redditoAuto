@@ -10,8 +10,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.MediaType;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import static org.mockito.ArgumentMatchers.*;
@@ -24,7 +24,7 @@ class AutoControllerTest {
 
     @Autowired MockMvc mvc;
     @Autowired ObjectMapper objectMapper;
-    @MockBean  AutoExtractionOrchestrator orchestrator;
+    @MockitoBean AutoExtractionOrchestrator orchestrator;
 
     private MotorizzazioneResponseDTO sampleResponse() {
         return MotorizzazioneResponseDTO.builder()
@@ -35,8 +35,6 @@ class AutoControllerTest {
             .annoProduzione(2022)
             .build();
     }
-
-    // ─── POST /estrai ─────────────────────────────────
 
     @Test
     @DisplayName("POST /estrai → 201 con body valido")
@@ -83,8 +81,6 @@ class AutoControllerTest {
             .andExpect(status().isBadRequest());
     }
 
-    // ─── POST /estrai-url ─────────────────────────────
-
     @Test
     @DisplayName("POST /estrai-url → 201 con URL valido")
     void estraiDaUrl_ok() throws Exception {
@@ -126,8 +122,6 @@ class AutoControllerTest {
                 .content("{}"))
             .andExpect(status().isBadRequest());
     }
-
-    // ─── POST /estrai-parametri ───────────────────────
 
     @Test
     @DisplayName("POST /estrai-parametri → 201 con parametri validi")

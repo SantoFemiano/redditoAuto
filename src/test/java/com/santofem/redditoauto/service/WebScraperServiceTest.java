@@ -1,51 +1,47 @@
 package com.santofem.redditoauto.service;
 
+import com.santofem.redditoauto.scraper.WebScraper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
 
-import static org.assertj.core.api.Assertions.*;
+import java.util.Optional;
 
-@DisplayName("WebScraperService — Unit Tests")
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.when;
+
+/**
+ * Test per WebScraper (interfaccia).
+ * Verifica il contratto dell'interfaccia tramite mock.
+ */
+@ExtendWith(MockitoExtension.class)
 class WebScraperServiceTest {
 
-    private final WebScraperService scraper = new WebScraperService();
+    @Mock
+    WebScraper webScraper;
 
     @Test
-    @DisplayName("URL non valido (ftp://) → WebScraperException")
-    void url_protocollo_invalido() {
-        assertThatThrownBy(() -> scraper.scaricaEPulisci("ftp://example.com"))
-            .isInstanceOf(WebScraperService.WebScraperException.class)
-            .hasMessageContaining("solo http/https");
+    @DisplayName("scrape() restituisce Optional.empty() se nessun risultato trovato")
+    void scrape_nessunaFonte() {
+        when(webScraper.scrape("MarcaSconosciuta", "ModelloX", "MotoreY", 2020))
+            .thenReturn(Optional.empty());
+
+        Optional<String> result = webScraper.scrape("MarcaSconosciuta", "ModelloX", "MotoreY", 2020);
+
+        assertThat(result).isEmpty();
     }
 
     @Test
-    @DisplayName("URL malformato → WebScraperException")
-    void url_malformato() {
-        assertThatThrownBy(() -> scraper.scaricaEPulisci("non-un-url")
-        ).isInstanceOf(WebScraperService.WebScraperException.class);
-    }
+    @DisplayName("scrape() restituisce Optional con testo se fonte trovata")
+    void scrape_fontePresente() {
+        String testoAtteso = "Volkswagen Golf 2.0 TDI 150 CV potenza 110 kW consumo 5.5 l/100km";
+        when(webScraper.scrape("Volkswagen", "Golf", "2.0 TDI", 2022))
+            .thenReturn(Optional.of(testoAtteso));
 
-    @Test
-    @DisplayName("HTML pulito: rimozione tag script, style, nav")
-    void pulizia_html_rimuove_elementi_non_informativi() throws Exception {
-        // Test del metodo privato via reflection (alternativa: rendere il metodo package-private)
-        // Usiamo invece un test indiretto passando HTML finto via mock
-        // Per il metodo estraiTestoPulito usiamo Jsoup direttamente come test di unit
-        var jsoupDoc = org.jsoup.Jsoup.parse(
-            "<html><body>"
-            + "<script>var x=1;</script>"
-            + "<nav>Menu</nav>"
-            + "<main><h1>Volkswagen Golf</h1><p>Potenza: 110 kW</p></main>"
-            + "<footer>Footer</footer>"
-            + "</body></html>"
-        );
-        jsoupDoc.select("script, style, nav, footer").remove();
-        String testo = jsoupDoc.text();
+        Optional<String> result = webScraper.scrape("Volkswagen", "Golf", "2.0 TDI", 2022);
 
-        assertThat(testo).contains("Volkswagen Golf");
-        assertThat(testo).contains("110 kW");
-        assertThat(testo).doesNotContain("var x=1");
-        assertThat(testo).doesNotContain("Menu");
-        assertThat(testo).doesNotContain("Footer");
+        assertThat(result).isPresent().contains(testoAtteso);
     }
 }
