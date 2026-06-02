@@ -4,6 +4,16 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
 import lombok.*;
 
+/**
+ * DTO per il POST /api/v1/auto/estrai-url.
+ *
+ * Riceve un URL da scrapare automaticamente.
+ *
+ * Esempio body:
+ * {
+ *   "url": "https://www.autoscout24.it/auto/volkswagen/golf/2022"
+ * }
+ */
 @Getter
 @Setter
 @NoArgsConstructor
@@ -17,7 +27,4 @@ public class EstraiDaUrlRequestDTO {
         message = "L'URL deve iniziare con http:// o https://"
     )
     private String url;
-
-    /** URL opzionale di fallback se il primario non è raggiungibile. */
-    private String urlFallback;
 }

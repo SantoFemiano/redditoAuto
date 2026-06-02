@@ -1,93 +1,109 @@
 package com.santofem.redditoauto.exception;
 
-import com.santofem.redditoauto.service.WebScraperService.WebScraperException;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.ProblemDetail;
+import org.springframework.http.ResponseEntity;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
-import java.net.URI;
-import java.time.Instant;
+import java.time.LocalDateTime;
+import java.util.HashMap;
 import java.util.Map;
-import java.util.stream.Collectors;
 
+/**
+ * Gestore globale delle eccezioni.
+ *
+ * Mappatura eccezione → HTTP status:
+ *   EntityNotFoundException  → 404 Not Found
+ *   IllegalArgumentException → 400 Bad Request
+ *   IllegalStateException    → 422 Unprocessable Entity
+ *   MethodArgumentNotValid   → 400 con dettaglio per campo
+ *   Exception (fallback)     → 500 Internal Server Error
+ */
 @RestControllerAdvice
 @Slf4j
 public class GlobalExceptionHandler {
 
-    @ExceptionHandler(MethodArgumentNotValidException.class)
-    public ProblemDetail handleValidation(MethodArgumentNotValidException ex) {
-        Map<String, String> errori = ex.getBindingResult().getFieldErrors().stream()
-            .collect(Collectors.toMap(
-                FieldError::getField,
-                fe -> fe.getDefaultMessage() != null ? fe.getDefaultMessage() : "valore non valido",
-                (a, b) -> a
-            ));
-        ProblemDetail pd = ProblemDetail.forStatus(HttpStatus.BAD_REQUEST);
-        pd.setTitle("Errore di validazione");
-        pd.setType(URI.create("https://redditoauto.local/errors/validation"));
-        pd.setProperty("errori", errori);
-        pd.setProperty("timestamp", Instant.now());
-        return pd;
-    }
+    // ─── 404 ─────────────────────────────────────────
 
     @ExceptionHandler(EntityNotFoundException.class)
-    public ProblemDetail handleEntityNotFound(EntityNotFoundException ex) {
-        log.warn("Entità non trovata: {}", ex.getMessage());
-        ProblemDetail pd = ProblemDetail.forStatus(HttpStatus.NOT_FOUND);
-        pd.setTitle("Risorsa non trovata");
-        pd.setDetail(ex.getMessage());
-        pd.setType(URI.create("https://redditoauto.local/errors/not-found"));
-        pd.setProperty("timestamp", Instant.now());
-        return pd;
+    public ResponseEntity<ErrorResponse> handleNotFound(EntityNotFoundException ex) {
+        log.warn("Entity non trovata: {}", ex.getMessage());
+        return ResponseEntity
+            .status(HttpStatus.NOT_FOUND)
+            .body(ErrorResponse.of(HttpStatus.NOT_FOUND, ex.getMessage()));
     }
+
+    // ─── 400 ─────────────────────────────────────────
 
     @ExceptionHandler(IllegalArgumentException.class)
-    public ProblemDetail handleIllegalArgument(IllegalArgumentException ex) {
-        log.warn("Errore logico: {}", ex.getMessage());
-        ProblemDetail pd = ProblemDetail.forStatus(HttpStatus.UNPROCESSABLE_ENTITY);
-        pd.setTitle("Errore nella richiesta");
-        pd.setDetail(ex.getMessage());
-        pd.setType(URI.create("https://redditoauto.local/errors/unprocessable"));
-        pd.setProperty("timestamp", Instant.now());
-        return pd;
+    public ResponseEntity<ErrorResponse> handleBadRequest(IllegalArgumentException ex) {
+        log.warn("Argomento non valido: {}", ex.getMessage());
+        return ResponseEntity
+            .status(HttpStatus.BAD_REQUEST)
+            .body(ErrorResponse.of(HttpStatus.BAD_REQUEST, ex.getMessage()));
     }
+
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    public ResponseEntity<ErrorResponse> handleValidation(MethodArgumentNotValidException ex) {
+        Map<String, String> erroriCampi = new HashMap<>();
+        ex.getBindingResult().getAllErrors().forEach(error -> {
+            String campo   = error instanceof FieldError fe ? fe.getField() : error.getObjectName();
+            String messaggio = error.getDefaultMessage();
+            erroriCampi.put(campo, messaggio);
+        });
+
+        log.warn("Errore di validazione: {}", erroriCampi);
+        return ResponseEntity
+            .status(HttpStatus.BAD_REQUEST)
+            .body(ErrorResponse.ofValidation(erroriCampi));
+    }
+
+    // ─── 422 ─────────────────────────────────────────
 
     @ExceptionHandler(IllegalStateException.class)
-    public ProblemDetail handleIllegalState(IllegalStateException ex) {
-        log.error("Stato inconsistente: {}", ex.getMessage());
-        ProblemDetail pd = ProblemDetail.forStatus(HttpStatus.CONFLICT);
-        pd.setTitle("Dati incompleti nel database");
-        pd.setDetail(ex.getMessage());
-        pd.setType(URI.create("https://redditoauto.local/errors/incomplete-data"));
-        pd.setProperty("timestamp", Instant.now());
-        return pd;
+    public ResponseEntity<ErrorResponse> handleUnprocessable(IllegalStateException ex) {
+        log.warn("Stato non processabile: {}", ex.getMessage());
+        return ResponseEntity
+            .status(HttpStatus.UNPROCESSABLE_ENTITY)
+            .body(ErrorResponse.of(HttpStatus.UNPROCESSABLE_ENTITY, ex.getMessage()));
     }
 
-    /** Scraping fallito (URL irraggiungibile, pagina SPA, HTTP error). */
-    @ExceptionHandler(WebScraperException.class)
-    public ProblemDetail handleScraper(WebScraperException ex) {
-        log.error("Errore scraping: {}", ex.getMessage());
-        ProblemDetail pd = ProblemDetail.forStatus(HttpStatus.BAD_GATEWAY);
-        pd.setTitle("Errore recupero dati dalla fonte esterna");
-        pd.setDetail(ex.getMessage());
-        pd.setType(URI.create("https://redditoauto.local/errors/scraping"));
-        pd.setProperty("timestamp", Instant.now());
-        return pd;
-    }
+    // ─── 500 ─────────────────────────────────────────
 
     @ExceptionHandler(Exception.class)
-    public ProblemDetail handleGeneric(Exception ex) {
+    public ResponseEntity<ErrorResponse> handleGeneric(Exception ex) {
         log.error("Errore imprevisto", ex);
-        ProblemDetail pd = ProblemDetail.forStatus(HttpStatus.INTERNAL_SERVER_ERROR);
-        pd.setTitle("Errore interno del server");
-        pd.setDetail("Si è verificato un errore imprevisto. Riprova o contatta il supporto.");
-        pd.setType(URI.create("https://redditoauto.local/errors/internal"));
-        pd.setProperty("timestamp", Instant.now());
-        return pd;
+        return ResponseEntity
+            .status(HttpStatus.INTERNAL_SERVER_ERROR)
+            .body(ErrorResponse.of(HttpStatus.INTERNAL_SERVER_ERROR,
+                "Errore interno del server. Contatta il supporto."));
+    }
+
+    // ─── Record risposta errore ───────────────────────
+
+    public record ErrorResponse(
+        int status,
+        String error,
+        String messaggio,
+        LocalDateTime timestamp,
+        Map<String, String> erroriCampi
+    ) {
+        static ErrorResponse of(HttpStatus status, String messaggio) {
+            return new ErrorResponse(
+                status.value(), status.getReasonPhrase(), messaggio,
+                LocalDateTime.now(), null
+            );
+        }
+
+        static ErrorResponse ofValidation(Map<String, String> erroriCampi) {
+            return new ErrorResponse(
+                400, "Bad Request", "Errori di validazione nei campi",
+                LocalDateTime.now(), erroriCampi
+            );
+        }
     }
 }

@@ -4,6 +4,18 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import lombok.*;
 
+/**
+ * DTO per il POST /api/v1/auto/estrai.
+ *
+ * Riceve testo grezzo (copia-incolla da scheda tecnica)
+ * e una fonte opzionale per tracciabilità.
+ *
+ * Esempio body:
+ * {
+ *   "testoGrezzo": "Volkswagen Golf 2.0 TDI 150 CV, potenza 110 kW, consumo 5.5 l/100km...",
+ *   "fonteDati": "https://www.autoscout24.it/scheda/golf-tdi"
+ * }
+ */
 @Getter
 @Setter
 @NoArgsConstructor
@@ -11,10 +23,11 @@ import lombok.*;
 @Builder
 public class EstraiAutoRequestDTO {
 
-    @NotBlank(message = "Il testo grezzo non può essere vuoto")
-    @Size(min = 50, max = 20000, message = "Testo grezzo: tra 50 e 20000 caratteri")
+    @NotBlank(message = "Il testo da analizzare è obbligatorio")
+    @Size(min = 50, message = "Il testo è troppo breve per estrarre dati affidabili (min 50 caratteri)")
+    @Size(max = 20000, message = "Testo troppo lungo (max 20.000 caratteri)")
     private String testoGrezzo;
 
-    /** URL o descrizione della fonte (es. link AutoScout24, MotorTrend, ecc.) */
+    /** URL o descrizione della fonte — opzionale, utile per tracciabilità dei dati. */
     private String fonteDati;
 }
