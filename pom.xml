@@ -15,10 +15,13 @@
     <description>Calcolatore di sostenibilita economica per auto</description>
 
     <properties>
-        <!-- Java 25 — allineato alla JVM installata sul Mac -->
         <java.version>25</java.version>
-        <!-- Lombok 1.18.36: prima versione con supporto stabile Java 23+ -->
-        <lombok.version>1.18.36</lombok.version>
+        <!--
+            Lombok 1.18.38 (edge): prima versione con supporto sperimentale Java 24/25.
+            Risolve: ExceptionInInitializerError com.sun.tools.javac.code.TypeTag :: UNKNOWN
+            Ref: https://github.com/projectlombok/lombok/issues/3722
+        -->
+        <lombok.version>1.18.38</lombok.version>
         <langchain4j.version>0.35.0</langchain4j.version>
         <springdoc.version>2.8.8</springdoc.version>
     </properties>
@@ -73,7 +76,7 @@
             <scope>test</scope>
         </dependency>
 
-        <!-- Lombok 1.18.36: supporto Java 23+ e @Slf4j/@Builder/@Data -->
+        <!-- Lombok 1.18.38: supporto sperimentale Java 25 -->
         <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>
@@ -139,13 +142,26 @@
                 </configuration>
             </plugin>
 
-            <!-- Compiler plugin esplicito per Java 25 + annotation processing Lombok -->
+            <!-- Compiler esplicito: Java 25 + Lombok annotation processor -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
                 <configuration>
                     <source>${java.version}</source>
                     <target>${java.version}</target>
+                    <compilerArgs>
+                        <!-- Abilita accesso alle API interne di javac per Lombok su Java 21+ -->
+                        <arg>--add-opens=jdk.compiler/com.sun.tools.javac.code=ALL-UNNAMED</arg>
+                        <arg>--add-opens=jdk.compiler/com.sun.tools.javac.comp=ALL-UNNAMED</arg>
+                        <arg>--add-opens=jdk.compiler/com.sun.tools.javac.file=ALL-UNNAMED</arg>
+                        <arg>--add-opens=jdk.compiler/com.sun.tools.javac.main=ALL-UNNAMED</arg>
+                        <arg>--add-opens=jdk.compiler/com.sun.tools.javac.model=ALL-UNNAMED</arg>
+                        <arg>--add-opens=jdk.compiler/com.sun.tools.javac.parser=ALL-UNNAMED</arg>
+                        <arg>--add-opens=jdk.compiler/com.sun.tools.javac.processing=ALL-UNNAMED</arg>
+                        <arg>--add-opens=jdk.compiler/com.sun.tools.javac.tree=ALL-UNNAMED</arg>
+                        <arg>--add-opens=jdk.compiler/com.sun.tools.javac.util=ALL-UNNAMED</arg>
+                        <arg>--add-opens=jdk.compiler/com.sun.tools.javac.jvm=ALL-UNNAMED</arg>
+                    </compilerArgs>
                     <annotationProcessorPaths>
                         <path>
                             <groupId>org.projectlombok</groupId>
