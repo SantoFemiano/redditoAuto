@@ -71,14 +71,18 @@ public class AutoExtractionOrchestrator {
         if (testoOpt.isPresent()) {
             log.info("[Orchestratore] Scraping riuscito ({} chars), invio all'AI extractor",
                 testoOpt.get().length());
-            dto = callAiSafely(() -> aiExtractor.extractCarData(
+            CarDataDTO raw = callAiSafely(() -> aiExtractor.extractCarData(
                 marca, modello, motore, String.valueOf(anno), testoOpt.get()));
+            // Override post-AI: i campi identitari vengono sempre imposti dai
+            // parametri noti, mai lasciati all'interpretazione di Gemini.
+            dto = overrideIdentita(raw, marca, modello, motore, anno);
             fonteDati = "scraping:auto-data.net:" + marca + ":" + modello + ":" + anno;
         } else {
             log.warn("[Orchestratore] Scraping fallito. Fallback AI-direct per {} {} {} {}",
                 marca, modello, motore, anno);
-            dto = callAiSafely(() -> aiDirectProvider.getCarData(
+            CarDataDTO raw = callAiSafely(() -> aiDirectProvider.getCarData(
                 marca, modello, motore, String.valueOf(anno)));
+            dto = overrideIdentita(raw, marca, modello, motore, anno);
             fonteDati = "ai-direct:" + marca + ":" + modello + ":" + anno;
         }
 
@@ -112,6 +116,73 @@ public class AutoExtractionOrchestrator {
     }
 
     // -----------------------------------------------
+    // OVERRIDE POST-AI (difesa principale contro placeholder)
+    // -----------------------------------------------
+
+    /**
+     * Sovrascrive sempre i campi identitari del DTO con i valori noti dal frontend.
+     *
+     * MOTIVAZIONE:
+     * Gemini, anche con prompt espliciti, puo' restituire i placeholder del template
+     * ({marca}, {modello}, ecc.) oppure valori errati per questi campi.
+     * Poiche' marca/modello/nomeMotore/anno sono gia' noti dal frontend al 100%,
+     * non ha senso affidarsi all'AI per essi: li imponiamo sempre qui.
+     *
+     * Questo pattern ("AI per i dati tecnici, sorgente esterna per i metadati")
+     * e' piu' robusto di qualsiasi ingegneria del prompt.
+     */
+    private CarDataDTO overrideIdentita(
+            CarDataDTO raw, String marca, String modello, String motore, int anno) {
+
+        boolean placeholderRilevato =
+            isPlaceholder(raw.marca()) ||
+            isPlaceholder(raw.modello()) ||
+            isPlaceholder(raw.nomeMotore());
+
+        if (placeholderRilevato) {
+            log.warn("[AI] Placeholder rilevato nel DTO raw: marca='{}' modello='{}' motore='{}'. "
+                   + "Override applicato con i valori frontend.",
+                raw.marca(), raw.modello(), raw.nomeMotore());
+        }
+
+        return new CarDataDTO(
+            marca,
+            modello,
+            motore,
+            anno,
+            raw.tipoCarburante(),
+            raw.tipoCambio(),
+            raw.potenzaKw(),
+            raw.potenzaCv(),
+            raw.cilindrataCC(),
+            raw.consumoMedioLitri100km(),
+            raw.consumoUrbanoLitri100km(),
+            raw.consumoExtraurbanoLitri100km(),
+            raw.autonomiaKmElettrica(),
+            raw.misuraPneumaticiAnteriori(),
+            raw.misuraPneumaticiPosteriori(),
+            raw.runFlat(),
+            raw.prezzoListinoEur(),
+            raw.costoTagliandoBaseEur(),
+            raw.costoTagliandoMaiorEur(),
+            raw.intervalloTagliandoKm(),
+            raw.intervalloTagliandoMaiorKm(),
+            raw.gruppoAssicurativo()
+        );
+    }
+
+    /**
+     * Rileva se Gemini ha restituito un placeholder del template anziche' un valore reale.
+     * Controlla le forme: {campo}, {{campo}}, la stringa 'null', blank.
+     */
+    private boolean isPlaceholder(String value) {
+        if (value == null || value.isBlank()) return true;
+        String trimmed = value.trim();
+        return trimmed.equalsIgnoreCase("null")
+            || (trimmed.startsWith("{") && trimmed.endsWith("}"));
+    }
+
+    // -----------------------------------------------
     // WRAPPER AI
     // -----------------------------------------------
 
@@ -140,12 +211,12 @@ public class AutoExtractionOrchestrator {
             dto.tipoCarburante(), dto.potenzaKw());
 
         if (!dto.isValid()) {
-            log.warn("[AI] Dati insufficienti - salvataggio bloccato. " +
-                     "DTO: marca='{}' modello='{}' kw={} carburante='{}'.",
+            log.warn("[AI] Dati insufficienti - salvataggio bloccato. "
+                   + "DTO: marca='{}' modello='{}' kw={} carburante='{}'.",
                 dto.marca(), dto.modello(), dto.potenzaKw(), dto.tipoCarburante());
             throw new IllegalStateException(
-                "L'AI non ha estratto i campi minimi obbligatori. " +
-                "Controlla che marca/modello/anno siano corretti."
+                "L'AI non ha estratto i campi minimi obbligatori. "
+                + "Controlla che marca/modello/anno siano corretti."
             );
         }
 
