@@ -7,6 +7,7 @@ import com.santofem.redditoauto.controller.dto.MotorizzazioneResponseDTO;
 import com.santofem.redditoauto.entity.Marca;
 import com.santofem.redditoauto.entity.Modello;
 import com.santofem.redditoauto.entity.Motorizzazione;
+import com.santofem.redditoauto.exception.GeminiUnavailableException;
 import com.santofem.redditoauto.mapper.CarDataMapper;
 import com.santofem.redditoauto.repository.MarcaRepository;
 import com.santofem.redditoauto.repository.ModelloRepository;
@@ -27,8 +28,11 @@ import java.util.Optional;
  *   1. Cache DB check
  *   2. WebScraper.scrape()  → se OK: AiCarDataExtractor estrae dal testo
  *   3. Fallback AI-direct   → se scraping fallisce: AiDirectDataProvider
- *      genera i dati dal training set di Gemini
  *   4. isValid() + dedup + persist
+ *
+ * GESTIONE ERRORI AI:
+ *   - RuntimeException con messaggio "503" → Gemini sovraccarico → GeminiUnavailableException → HTTP 503
+ *   - DTO con campi null dopo chiamata AI → dati insufficienti → HTTP 422
  */
 @Service
 @RequiredArgsConstructor
@@ -75,14 +79,14 @@ public class AutoExtractionOrchestrator {
         if (testoOpt.isPresent()) {
             // 3a. Scraping OK: AI estrae dal testo
             log.info("[Orchestratore] Scraping riuscito, invio testo all'AI extractor");
-            dto = aiExtractor.extractCarData(testoOpt.get());
+            dto = callAiSafely(() -> aiExtractor.extractCarData(testoOpt.get()));
             fonteDati = "scraping:" + marca + ":" + modello + ":" + anno;
         } else {
             // 3b. Fallback: AI genera direttamente
-            // NOTA: anno passato come String perche' LangChain4j @V non gestisce primitivi
             log.warn("[Orchestratore] Scraping fallito. Fallback AI-direct per {} {} {} {}",
                 marca, modello, motore, anno);
-            dto = aiDirectProvider.getCarData(marca, modello, motore, String.valueOf(anno));
+            dto = callAiSafely(() -> aiDirectProvider.getCarData(
+                marca, modello, motore, String.valueOf(anno)));
             fonteDati = "ai-direct:" + marca + ":" + modello + ":" + anno;
         }
 
@@ -90,16 +94,35 @@ public class AutoExtractionOrchestrator {
     }
 
     @Transactional
-    public MotorizzazioneResponseDTO estraiDaUrl(String url, String fonteDati) {
-        log.info("[Orchestratore] Estrazione da URL: {}", url);
-        throw new UnsupportedOperationException(
-            "estraiDaUrl() non ancora implementato. Usa estraiDaParametri() invece.");
+    public MotorizzazioneResponseDTO estraiDaTesto(String testoGrezzo, String fonteDati) {
+        CarDataDTO dto = callAiSafely(() -> aiExtractor.extractCarData(testoGrezzo));
+        return persistiDto(dto, fonteDati);
     }
 
-    @Transactional
-    public MotorizzazioneResponseDTO estraiDaTesto(String testoGrezzo, String fonteDati) {
-        CarDataDTO dto = aiExtractor.extractCarData(testoGrezzo);
-        return persistiDto(dto, fonteDati);
+    // -----------------------------------------------
+    // WRAPPER AI: intercetta 503 prima che diventi DTO vuoto
+    // -----------------------------------------------
+
+    /**
+     * Esegue una chiamata AI wrappandola in try/catch.
+     * Se LangChain4j lancia RuntimeException con "503" nel messaggio
+     * (dopo aver esaurito i retry), propaga GeminiUnavailableException
+     * invece di tornare un DTO vuoto con null ovunque.
+     */
+    private CarDataDTO callAiSafely(java.util.function.Supplier<CarDataDTO> aiCall) {
+        try {
+            return aiCall.get();
+        } catch (RuntimeException ex) {
+            String msg = ex.getMessage() != null ? ex.getMessage() : "";
+            if (msg.contains("503") || msg.contains("UNAVAILABLE") || msg.contains("high demand")) {
+                log.error("[AI] Gemini 503 dopo tutti i retry: {}", msg);
+                throw new GeminiUnavailableException(
+                    "Il servizio AI è temporaneamente sovraccarico. Riprova tra qualche secondo.", ex);
+            }
+            // Per altri errori AI (400, 401, ecc.) rilancia così com'è
+            log.error("[AI] Errore chiamata Gemini: {}", msg);
+            throw ex;
+        }
     }
 
     // -----------------------------------------------
@@ -150,7 +173,6 @@ public class AutoExtractionOrchestrator {
                         .build());
             });
 
-        // Mappa + persisti
         Motorizzazione motorizzazione = carDataMapper.toEntity(dto, modello);
         motorizzazione.setFonteDati(fonteDati);
         Motorizzazione salvata = motorizzazioneRepository.save(motorizzazione);
