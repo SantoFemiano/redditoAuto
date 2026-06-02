@@ -1,6 +1,7 @@
 package com.santofem.redditoauto.config;
 
 import com.santofem.redditoauto.ai.AiCarDataExtractor;
+import dev.langchain4j.model.chat.request.ResponseFormat;
 import dev.langchain4j.model.googleai.GoogleAiGeminiChatModel;
 import dev.langchain4j.service.AiServices;
 import org.springframework.beans.factory.annotation.Value;
@@ -19,12 +20,14 @@ import org.springframework.context.annotation.Profile;
  *   e per non fallire l'avvio con la fake key 'test-fake-key'.
  *   I test unitari del service usano @Mock su AiCarDataExtractor direttamente.
  *
- * MODELLO SCELTO: gemini-1.5-flash
+ * MODELLO SCELTO: gemini-2.0-flash
  * - Veloce, economico, ottimo per structured output / extraction tasks.
  * - temperature=0.0: risposta deterministica, zero creativita'.
  *   Fondamentale per un extractor: vogliamo mapping, non generazione.
  *
  * STRUCTURED OUTPUT:
+ * - responseFormat(ResponseFormat.JSON) forza Gemini 2.x a rispondere
+ *   sempre in JSON valido, prevenendo risposte in testo libero.
  * - LangChain4j invia automaticamente il JSON Schema di CarDataDTO a Gemini
  *   tramite il parametro 'responseSchema' dell'API.
  * - Gemini e' istruito a rispettare lo schema e restituire JSON valido.
@@ -40,6 +43,8 @@ public class LangChain4jConfig {
      * Configura il modello Gemini.
      * temperature=0.0 e' critico: garantisce output deterministico
      * e previene le allucinazioni nell'extraction task.
+     * responseFormat(ResponseFormat.JSON) e' obbligatorio con Gemini 2.x
+     * per forzare JSON puro invece di testo libero.
      */
     @Bean
     @ConditionalOnProperty(name = "gemini.api.key", havingValue = "changeme", matchIfMissing = false)
@@ -56,9 +61,10 @@ public class LangChain4jConfig {
     public GoogleAiGeminiChatModel geminiChatModel() {
         return GoogleAiGeminiChatModel.builder()
                 .apiKey(geminiApiKey)
-                .modelName("gemini-3.1-flash-lite")
+                .modelName("gemini-2.0-flash")
                 .temperature(0.0)
                 .maxOutputTokens(2048)
+                .responseFormat(ResponseFormat.JSON)
                 .build();
     }
 
