@@ -1,80 +1,116 @@
 package com.santofem.redditoauto.ai.dto;
 
 import com.fasterxml.jackson.annotation.JsonPropertyDescription;
+import dev.langchain4j.model.output.structured.Description;
 
 /**
- * DTO fortemente tipizzato restituito dall'AI (LangChain4j + Gemini).
- * Usato come output dell'AiCarDataExtractor.
- * Tutti i campi sono nullable: se il dato non è nel testo grezzo, Gemini restituisce null.
+ * DTO fortemente tipizzato restituito da Gemini tramite LangChain4j structured output.
  *
- * Nota: record Java — immutabile per design, compatibile nativo con LangChain4j structured output.
+ * COME FUNZIONA:
+ * LangChain4j legge le annotazioni @Description (a livello record) e
+ * @JsonPropertyDescription (a livello campo) per costruire il JSON Schema
+ * che viene inviato a Gemini come istruzione sul formato di risposta atteso.
+ * Gemini restituisce un JSON che LangChain4j deserializza in questo record.
+ *
+ * REGOLA ANTI-ALLUCINAZIONE:
+ * Tutti i campi sono nullable. Se il dato non e' nel testo grezzo,
+ * Gemini deve restituire null — mai inventare o stimare.
  */
+@Description("Dati tecnici estratti dalla scheda tecnica di un autoveicolo. " +
+             "Tutti i campi non trovati nel testo devono essere null.")
 public record CarDataDTO(
 
-    @JsonPropertyDescription("Marca del veicolo, es. 'Volkswagen', 'BMW'")
+    @JsonPropertyDescription("Marca del veicolo, es. 'Volkswagen', 'BMW', 'Toyota'")
     String marca,
 
-    @JsonPropertyDescription("Modello del veicolo, es. 'Golf', 'Serie 3'")
+    @JsonPropertyDescription("Modello del veicolo, es. 'Golf', 'Serie 3', 'Yaris'")
     String modello,
 
-    @JsonPropertyDescription("Nome completo della motorizzazione, es. '2.0 TDI 150 CV DSG'")
+    @JsonPropertyDescription("Nome completo della motorizzazione inclusa potenza e cambio, es. '2.0 TDI 150 CV DSG'")
     String nomeMotore,
 
-    @JsonPropertyDescription("Anno di produzione o immatricolazione, numero intero es. 2022")
+    @JsonPropertyDescription("Anno di produzione o immatricolazione come intero, es. 2022")
     Integer annoProduzione,
 
-    @JsonPropertyDescription("Tipo carburante: BENZINA, DIESEL, GPL, METANO, IBRIDO_BENZINA, IBRIDO_DIESEL, IBRIDO_PLUGIN, ELETTRICO")
+    @JsonPropertyDescription(
+        "Tipo carburante. Usa ESATTAMENTE uno di questi valori: " +
+        "BENZINA, DIESEL, GPL, METANO, IBRIDO_BENZINA, IBRIDO_DIESEL, IBRIDO_PLUGIN, ELETTRICO, IDROGENO. " +
+        "null se non presente nel testo.")
     String tipoCarburante,
 
-    @JsonPropertyDescription("Tipo cambio: MANUALE, AUTOMATICO_TRADIZIONALE, DCT, CVT, SINGOLA_MARCIA")
+    @JsonPropertyDescription(
+        "Tipo cambio. Usa ESATTAMENTE uno di questi valori: " +
+        "MANUALE, AUTOMATICO_TRADIZIONALE, DCT, CVT, SINGOLA_MARCIA. " +
+        "null se non presente nel testo.")
     String tipoCambio,
 
-    @JsonPropertyDescription("Potenza in Kilowatt, numero intero es. 110")
+    @JsonPropertyDescription("Potenza motore in Kilowatt come intero, es. 110. null se assente.")
     Integer potenzaKw,
 
-    @JsonPropertyDescription("Potenza in Cavalli Vapore, numero intero es. 150")
+    @JsonPropertyDescription("Potenza motore in Cavalli Vapore come intero, es. 150. null se assente.")
     Integer potenzaCv,
 
-    @JsonPropertyDescription("Cilindrata in cc, numero intero es. 1968")
+    @JsonPropertyDescription("Cilindrata in centimetri cubici come intero, es. 1968. null se assente.")
     Integer cilindrataCC,
 
-    @JsonPropertyDescription("Consumo medio in litri per 100km (ciclo combinato), es. 5.5")
+    @JsonPropertyDescription(
+        "Consumo medio ciclo combinato WLTP in litri per 100km, es. 5.5. " +
+        "Se il testo riporta km/l, converti: consumo = 100 / (km/l). null se assente.")
     Double consumoMedioLitri100km,
 
-    @JsonPropertyDescription("Consumo in ciclo urbano in litri per 100km, es. 7.2")
+    @JsonPropertyDescription("Consumo ciclo urbano in litri per 100km, es. 7.2. null se assente.")
     Double consumoUrbanoLitri100km,
 
-    @JsonPropertyDescription("Consumo in ciclo extraurbano in litri per 100km, es. 4.5")
+    @JsonPropertyDescription("Consumo ciclo extraurbano in litri per 100km, es. 4.5. null se assente.")
     Double consumoExtraurbanoLitri100km,
 
-    @JsonPropertyDescription("Autonomia elettrica in km (solo EV o PHEV), es. 60")
+    @JsonPropertyDescription("Autonomia elettrica in km (solo per EV o PHEV plug-in), es. 60. null per tutti gli altri.")
     Integer autonomiaKmElettrica,
 
-    @JsonPropertyDescription("Misura pneumatici anteriori nel formato standard, es. '205/55 R16'")
+    @JsonPropertyDescription(
+        "Misura pneumatici anteriori nel formato standard LARGHEZZA/PROFILO RZEPPA, es. '205/55 R16'. " +
+        "null se assente.")
     String misuraPneumaticiAnteriori,
 
-    @JsonPropertyDescription("Misura pneumatici posteriori se diversa dagli anteriori, es. '225/45 R17'")
+    @JsonPropertyDescription(
+        "Misura pneumatici posteriori se diversa dagli anteriori, es. '225/45 R17'. " +
+        "null se uguale agli anteriori o se assente.")
     String misuraPneumaticiPosteriori,
 
-    @JsonPropertyDescription("true se i pneumatici sono run-flat, false altrimenti")
+    @JsonPropertyDescription("true se i pneumatici sono di tipo run-flat, false altrimenti. null se non specificato.")
     Boolean runFlat,
 
-    @JsonPropertyDescription("Prezzo di listino in euro, es. 32500.00")
+    @JsonPropertyDescription("Prezzo di listino ufficiale in euro come decimale, es. 32500.0. null se assente.")
     Double prezzoListinoEur,
 
-    @JsonPropertyDescription("Costo stimato tagliando ordinario (olio+filtri) in euro, es. 200.0")
+    @JsonPropertyDescription("Costo stimato tagliando ordinario (cambio olio + filtri) in euro, es. 200.0. null se assente.")
     Double costoTagliandoBaseEur,
 
-    @JsonPropertyDescription("Costo stimato tagliando maggiore (cinghia distribuzione inclusa) in euro, es. 650.0")
+    @JsonPropertyDescription("Costo stimato tagliando maggiore (include cinghia distribuzione se presente) in euro, es. 650.0. null se assente.")
     Double costoTagliandoMaiorEur,
 
-    @JsonPropertyDescription("Intervallo tagliando ordinario in km, es. 15000")
+    @JsonPropertyDescription("Intervallo tra tagliandi ordinari in km, es. 15000. null se assente.")
     Integer intervalloTagliandoKm,
 
-    @JsonPropertyDescription("Intervallo tagliando maggiore in km, es. 60000")
+    @JsonPropertyDescription("Intervallo tra tagliandi maggiori in km, es. 60000. null se assente.")
     Integer intervalloTagliandoMaiorKm,
 
-    @JsonPropertyDescription("Gruppo assicurativo stimato (1-20), dove 1 è meno rischioso")
+    @JsonPropertyDescription("Gruppo assicurativo da 1 (rischio minimo) a 20 (rischio massimo). null se assente.")
     Integer gruppoAssicurativo
 
-) {}
+) {
+    /**
+     * Verifica che i campi obbligatori per il calcolo di sostenibilita' siano presenti.
+     * Usato dal MotorizzazioneService dopo l'estrazione per decidere
+     * se il risultato e' sufficientemente completo da essere salvato.
+     *
+     * @return true se i dati minimi sono presenti
+     */
+    public boolean isValid() {
+        return marca != null && !marca.isBlank()
+            && modello != null && !modello.isBlank()
+            && nomeMotore != null && !nomeMotore.isBlank()
+            && potenzaKw != null
+            && tipoCarburante != null;
+    }
+}
