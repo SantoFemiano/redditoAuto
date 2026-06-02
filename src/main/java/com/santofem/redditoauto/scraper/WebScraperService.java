@@ -10,14 +10,14 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
-import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
 /**
- * WebScraperService - orchestratore multi-fonte.
+ * WebScraperService - usa SOLO auto-data.net tramite AutoDataNetScraper.
+ *
+ * Non ci sono fallback su altri siti: auto-data.net è l'unica fonte.
+ * Se lo scraping fallisce, l'orchestratore userà il fallback AI-direct.
  */
 @Service
 @Slf4j
@@ -34,11 +34,8 @@ public class WebScraperService implements WebScraper {
 
     /**
      * MAX TESTO AI: 3500 chars.
-     * Il testo grezzo viene troncato prima di essere inviato a Gemini.
-     * Motivazione: testi molto lunghi (>4000 chars) aumentano la probabilita'
-     * che Gemini produca JSON troncato anche con maxOutputTokens alto,
-     * perche' il contesto input compete con lo spazio di output.
-     * 3500 chars contiene SEMPRE tutti i dati tecnici rilevanti di auto-data.net.
+     * Testi > 4000 chars aumentano la probabilità di JSON troncato da Gemini.
+     * auto-data.net produce schede di ~1500-3000 chars: sufficiente.
      */
     @Value("${scraper.max-text-length:3500}")
     private int maxTextLength;
@@ -46,17 +43,11 @@ public class WebScraperService implements WebScraper {
     @Value("${scraper.min-text-length:200}")
     private int minTextLength;
 
-    private static final Set<String> KEYWORD_GENERICHE = Set.of(
-        "consumo", "kw", "cv", "cilindrata", "carburante", "diesel", "benzina",
-        "potenza", "coppia", "cambio", "tagliando", "pneumatici", "emissioni",
-        "autonomia", "wltp", "nedc", "cavalli", "motore", "cilindri"
-    );
-
-    private static final Set<String> KEYWORD_NUMERICHE = Set.of(
+    private static final Set<String> KEYWORD_TECNICHE = Set.of(
         "l/100", "l/100km", " cc", " nm", "rpm", "euro 6", "euro6",
-        "g/km", "co2", "kwh", "mpi", "tdi", "tsi", "gdi", "crdi",
-        "litri/100", "consumi urbani", "consumi extraurbani", "consumo misto",
-        "cilindri in", "valvole per", "coppia massima"
+        "g/km", "co2", "kwh", "tdi", "tsi", "gdi", "crdi",
+        "consumi", "cilindri", "valvole", "coppia massima", "kw",
+        "cilindrata", "potenza", "carburante"
     );
 
     // -----------------------------------------------
@@ -67,41 +58,17 @@ public class WebScraperService implements WebScraper {
     public Optional<String> scrape(String marca, String modello, String motore, int anno) {
         log.info("[Scraper] Avvio ricerca per: {} {} {} {}", marca, modello, motore, anno);
 
-        Optional<String> adnResult = autoDataNetScraper.scrape(marca, modello, motore, anno);
-        if (adnResult.isPresent()) {
-            log.info("[Scraper] Testo tecnico trovato da 'auto-data.net' ({} chars)",
-                adnResult.get().length());
-            return adnResult;
+        Optional<String> result = autoDataNetScraper.scrape(marca, modello, motore, anno);
+
+        if (result.isPresent()) {
+            String raw = result.get();
+            String sanitized = sanitizeForAi(raw);
+            String truncated = truncate(sanitized, maxTextLength);
+            log.info("[Scraper] Testo tecnico trovato da 'auto-data.net' ({} chars)", truncated.length());
+            return Optional.of(truncated);
         }
 
-        List<ScraperSource> sources = List.of(
-            new ScraperSource("auto.it",
-                "https://www.auto.it/schede_tecniche/"
-                    + slugify(marca) + "/" + slugify(modello) + "/" + anno + "/"),
-            new ScraperSource("motorbox.com",
-                "https://www.motorbox.com/auto/scheda-tecnica/"
-                    + slugify(marca) + "/" + slugify(modello) + "-" + anno + "/"),
-            new ScraperSource("dati.guru",
-                "https://www.dati.guru/it/"
-                    + slugify(marca) + "/" + slugify(modello) + "/" + anno + "/"),
-            new ScraperSource("Bing",
-                "https://www.bing.com/search?q="
-                    + encode("scheda tecnica " + marca + " " + modello
-                        + " " + motore + " " + anno
-                        + " consumi kw cilindrata l/100km"))
-        );
-
-        for (ScraperSource source : sources) {
-            Optional<String> result = fetchAndParse(source);
-            if (result.isPresent()) {
-                log.info("[Scraper] Testo tecnico trovato da '{}' ({} chars)",
-                    source.name(), result.get().length());
-                return result;
-            }
-        }
-
-        log.warn("[Scraper] Nessuna fonte ha restituito dati tecnici per: {} {} {}",
-            marca, modello, motore);
+        log.warn("[Scraper] auto-data.net non ha trovato dati per: {} {} {}", marca, modello, motore);
         return Optional.empty();
     }
 
@@ -112,7 +79,7 @@ public class WebScraperService implements WebScraper {
     }
 
     // -----------------------------------------------
-    // FETCH + PARSE GENERICO
+    // FETCH GENERICO (usato solo da scrapeUrl)
     // -----------------------------------------------
 
     Optional<String> fetchAndParse(ScraperSource source) {
@@ -128,27 +95,15 @@ public class WebScraperService implements WebScraper {
                 .get();
 
             String text = extractRelevantText(doc);
-
-            if (log.isDebugEnabled() && !text.isBlank()) {
-                log.debug("[Scraper] Snippet '{}': [{}]",
-                    source.name(), text.length() > 300 ? text.substring(0, 300) : text);
-            }
-
             if (text.length() < minTextLength) {
                 log.debug("[Scraper] Testo troppo corto da '{}': {} chars", source.name(), text.length());
                 return Optional.empty();
             }
-
             if (!isTestoTecnico(text)) {
-                log.warn("[Scraper] '{}' scartato: non e' una scheda tecnica ({} chars).",
-                    source.name(), text.length());
+                log.warn("[Scraper] '{}' scartato: non è una scheda tecnica", source.name());
                 return Optional.empty();
             }
-
-            // Sanitizza il testo prima di inviarlo all'AI:
-            // rimuove caratteri di controllo e virgolette che possono rompere il JSON
-            String sanitized = sanitizeForAi(text);
-            String enriched = "[FONTE: " + source.url() + "]\n" + sanitized;
+            String enriched = "[FONTE: " + source.url() + "]\n" + sanitizeForAi(text);
             return Optional.of(truncate(enriched, maxTextLength));
 
         } catch (IOException e) {
@@ -164,9 +119,7 @@ public class WebScraperService implements WebScraper {
     boolean isTestoTecnico(String testo) {
         if (testo == null || testo.isBlank()) return false;
         String lower = testo.toLowerCase();
-        if (KEYWORD_NUMERICHE.stream().anyMatch(lower::contains)) return true;
-        long count = KEYWORD_GENERICHE.stream().filter(lower::contains).count();
-        return count >= 4;
+        return KEYWORD_TECNICHE.stream().filter(lower::contains).count() >= 3;
     }
 
     // -----------------------------------------------
@@ -182,7 +135,7 @@ public class WebScraperService implements WebScraper {
         String[] selectors = {
             ".scheda-tecnica", ".technical-specs", ".specs-table",
             ".specs-container", ".car-specs", ".dati-tecnici",
-            "#specifiche-tecniche", "#dati-tecnici", "[data-specs]",
+            "#specifiche-tecniche", "#dati-tecnici",
             ".scheda", ".tecnica", ".caratteristiche", ".specifiche",
             "table", "dl", "article", "main", ".content", "#content"
         };
@@ -200,24 +153,14 @@ public class WebScraperService implements WebScraper {
     }
 
     // -----------------------------------------------
-    // SANITIZZAZIONE TESTO PER AI
+    // SANITIZZAZIONE PER AI
     // -----------------------------------------------
 
-    /**
-     * Rimuove caratteri che possono rompere il JSON generato da Gemini:
-     * - Caratteri di controllo (\r, tab, caratteri non printable)
-     * - Virgolette doppie non escapate nel mezzo del testo
-     *   (il testo viene inserito come valore di un campo JSON nel prompt)
-     * - Sequenze di newline eccessive (ridotte a max 2)
-     */
     private String sanitizeForAi(String text) {
         if (text == null) return "";
         return text
-            // Rimuovi caratteri di controllo eccetto newline normale
             .replaceAll("[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F]", "")
-            // Sostituisci virgolette doppie con singole (sicure dentro JSON)
             .replace('"', '\'')
-            // Riduci sequenze di newline eccessive
             .replaceAll("\\n{3,}", "\n\n")
             .trim();
     }
@@ -225,16 +168,6 @@ public class WebScraperService implements WebScraper {
     // -----------------------------------------------
     // UTILITY
     // -----------------------------------------------
-
-    private String slugify(String input) {
-        return input.toLowerCase().trim()
-                    .replaceAll("[^a-z0-9]+", "-")
-                    .replaceAll("^-|-$", "");
-    }
-
-    private String encode(String value) {
-        return URLEncoder.encode(value, StandardCharsets.UTF_8);
-    }
 
     private String truncate(String text, int maxLen) {
         return text.length() <= maxLen ? text : text.substring(0, maxLen) + "...[TRONCATO]";
