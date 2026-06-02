@@ -35,6 +35,10 @@ public class AutoExtractionOrchestrator {
     private final ModelloRepository modelloRepository;
     private final MotorizzazioneRepository motorizzazioneRepository;
 
+    // -----------------------------------------------
+    // ENDPOINT: /estrai-parametri (principale)
+    // -----------------------------------------------
+
     @Transactional
     public MotorizzazioneResponseDTO estraiDaParametri(
             String marca, String modello, String motore, int anno) {
@@ -67,8 +71,6 @@ public class AutoExtractionOrchestrator {
         if (testoOpt.isPresent()) {
             log.info("[Orchestratore] Scraping riuscito ({} chars), invio all'AI extractor",
                 testoOpt.get().length());
-            // Passa marca/modello/motore/anno come contesto esplicito
-            // cosi' l'AI non li deve indovinare dal testo grezzo
             dto = callAiSafely(() -> aiExtractor.extractCarData(
                 marca, modello, motore, String.valueOf(anno), testoOpt.get()));
             fonteDati = "scraping:auto-data.net:" + marca + ":" + modello + ":" + anno;
@@ -83,9 +85,27 @@ public class AutoExtractionOrchestrator {
         return persistiDto(dto, fonteDati);
     }
 
+    // -----------------------------------------------
+    // ENDPOINT: /estrai-url
+    // -----------------------------------------------
+
+    @Transactional
+    public MotorizzazioneResponseDTO estraiDaUrl(String url, String fonteDati) {
+        log.info("[Orchestratore] Estrazione da URL: {}", url);
+        Optional<String> testoOpt = webScraper.scrapeUrl(url);
+        String testo = testoOpt.orElseThrow(() ->
+            new IllegalStateException("Impossibile estrarre testo dall'URL: " + url));
+        CarDataDTO dto = callAiSafely(() -> aiExtractor.extractCarData(
+            "sconosciuta", "sconosciuto", "sconosciuto", "0", testo));
+        return persistiDto(dto, fonteDati);
+    }
+
+    // -----------------------------------------------
+    // ENDPOINT: /estrai (testo grezzo)
+    // -----------------------------------------------
+
     @Transactional
     public MotorizzazioneResponseDTO estraiDaTesto(String testoGrezzo, String fonteDati) {
-        // Fallback senza contesto: usato solo per endpoint dedicato
         CarDataDTO dto = callAiSafely(() -> aiExtractor.extractCarData(
             "sconosciuta", "sconosciuto", "sconosciuto", "0", testoGrezzo));
         return persistiDto(dto, fonteDati);
