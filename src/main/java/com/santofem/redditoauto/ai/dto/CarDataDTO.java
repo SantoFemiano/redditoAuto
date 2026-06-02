@@ -101,16 +101,28 @@ public record CarDataDTO(
 ) {
     /**
      * Verifica che i campi obbligatori per il calcolo di sostenibilita' siano presenti.
-     * Usato dal MotorizzazioneService dopo l'estrazione per decidere
-     * se il risultato e' sufficientemente completo da essere salvato.
      *
-     * @return true se i dati minimi sono presenti
+     * DIFESA CONTRO STRINGA "null":
+     * LangChain4j / Gemini in certi casi deserializza i campi assenti come la
+     * stringa letterale "null" invece di un vero null Java. isPresente() copre
+     * entrambi i casi.
+     *
+     * @return true se i dati minimi sono presenti e utilizzabili
      */
     public boolean isValid() {
-        return marca != null && !marca.isBlank()
-            && modello != null && !modello.isBlank()
-            && nomeMotore != null && !nomeMotore.isBlank()
-            && potenzaKw != null
-            && tipoCarburante != null;
+        return isPresente(marca)
+            && isPresente(modello)
+            && isPresente(nomeMotore)
+            && potenzaKw != null && potenzaKw > 0
+            && isPresente(tipoCarburante);
+    }
+
+    /**
+     * Ritorna true se la stringa e' non-null, non-blank e non la stringa letterale "null".
+     * Difesa contro l'output "null" (stringa) che Gemini/LangChain4j puo' restituire
+     * al posto di un vero null Java.
+     */
+    private static boolean isPresente(String s) {
+        return s != null && !s.isBlank() && !s.equalsIgnoreCase("null");
     }
 }

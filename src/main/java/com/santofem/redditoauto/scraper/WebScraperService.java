@@ -13,29 +13,30 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Implementazione multi-fonte del WebScraper.
  *
  * STRATEGIA:
- * Interroga le fonti in ordine di priorita'. Alla prima risposta valida
- * (testo estratto con lunghezza minima), si ferma e restituisce il testo.
+ * Interroga le fonti in ordine di priorita'. Alla prima risposta che supera
+ * la soglia minima DI TESTO TECNICO (non solo di lunghezza), si ferma.
  * Se tutte le fonti falliscono, restituisce Optional.empty().
  *
- * FONTI (in ordine):
- * 1. Scheda Tecnica IT  — dati tecnici italiani, molto strutturati
- * 2. AutoScout24 IT     — prezzi e allestimenti
- * 3. Motorizzazione.it  — dati ufficiali omologati
+ * FONTI (in ordine di qualita' per schede tecniche):
+ * 1. MotorOnline.it      — schede tecniche italiane strutturate
+ * 2. SchedaTecnica.it    — dati tecnici italiani
+ * 3. Motorizzazione.it   — dati ufficiali omologati
+ * 4. GoogleSearch        — fallback generale
  *
- * SICUREZZA:
- * - User-Agent configurabile (non usare il default Jsoup per evitare blocchi)
- * - Timeout configurabile
- * - Testo troncato a maxTextLength per non sprecare token Gemini
- * - Nessun cookie / sessione: solo GET stateless
+ * NOTA: AutoScout24 e' stato RIMOSSO perche' restituisce listing di annunci,
+ * non schede tecniche. Il testo estratto non contiene dati utili per l'AI
+ * e causa isValid()=false → DataIntegrityViolationException sul DB.
  *
- * IMPORTANTE — Rispetto del robots.txt:
- * Questo servizio e' per uso personale/educativo.
- * In produzione valutare l'uso di API ufficiali (es. Car APIs a pagamento).
+ * FILTRO isTestoTecnico():
+ * Prima di restituire il testo, verifica che contenga keyword tecniche
+ * (consumo, kw, cilindrata...). Testi che non le contengono vengono scartati
+ * anche se superano la lunghezza minima.
  */
 @Service
 @Slf4j
@@ -53,6 +54,13 @@ public class WebScraperService implements WebScraper {
     @Value("${scraper.min-text-length:200}")
     private int minTextLength;
 
+    /** Keyword tecniche: almeno 2 devono essere presenti per considerare il testo valido. */
+    private static final Set<String> KEYWORD_TECNICHE = Set.of(
+        "consumo", "kw", "cv", "cilindrata", "carburante", "diesel", "benzina",
+        "potenza", "coppia", "cambio", "tagliando", "pneumatici", "emissioni",
+        "autonomia", "wltp", "nedc", "cavalli", "motore", "cilindri"
+    );
+
     // -----------------------------------------------
     // PUBLIC API
     // -----------------------------------------------
@@ -62,15 +70,14 @@ public class WebScraperService implements WebScraper {
         String query = buildQuery(marca, modello, motore, anno);
         log.info("[Scraper] Avvio ricerca per: {} {} {} {}", marca, modello, motore, anno);
 
-        // Lista ordinata di fonti da provare
         List<ScraperSource> sources = List.of(
+            new ScraperSource(
+                "MotorOnline",
+                buildMotorOnlineUrl(marca, modello, anno)
+            ),
             new ScraperSource(
                 "SchedaTecnica.it",
                 buildSchedaTecnicaUrl(marca, modello, anno)
-            ),
-            new ScraperSource(
-                "AutoScout24",
-                buildAutoScout24Url(marca, modello, anno)
             ),
             new ScraperSource(
                 "GoogleSearch",
@@ -81,13 +88,13 @@ public class WebScraperService implements WebScraper {
         for (ScraperSource source : sources) {
             Optional<String> result = fetchAndParse(source);
             if (result.isPresent()) {
-                log.info("[Scraper] Testo estratto da '{}' ({} chars)",
+                log.info("[Scraper] Testo tecnico trovato da '{}' ({} chars)",
                     source.name(), result.get().length());
                 return result;
             }
         }
 
-        log.warn("[Scraper] Nessuna fonte ha restituito dati per: {} {} {}",
+        log.warn("[Scraper] Nessuna fonte ha restituito dati tecnici per: {} {} {}",
             marca, modello, motore);
         return Optional.empty();
     }
@@ -96,10 +103,6 @@ public class WebScraperService implements WebScraper {
     // FETCH + PARSE
     // -----------------------------------------------
 
-    /**
-     * Esegue il fetch HTTP e il parsing Jsoup per una singola fonte.
-     * Non lancia eccezioni: restituisce Optional.empty() in caso di errore.
-     */
     Optional<String> fetchAndParse(ScraperSource source) {
         try {
             log.debug("[Scraper] Tentativo su '{}': {}", source.name(), source.url());
@@ -107,7 +110,7 @@ public class WebScraperService implements WebScraper {
             Document doc = Jsoup.connect(source.url())
                 .userAgent(userAgent)
                 .timeout(timeoutMs)
-                .ignoreHttpErrors(true)      // non lancia su 4xx/5xx
+                .ignoreHttpErrors(true)
                 .followRedirects(true)
                 .get();
 
@@ -119,7 +122,15 @@ public class WebScraperService implements WebScraper {
                 return Optional.empty();
             }
 
-            // Aggiungi metadata fonte per l'audit trail nel DB
+            // FILTRO QUALITA': scarta testi senza keyword tecniche
+            // (es. listing annunci, pagine di categoria, risultati di ricerca generici)
+            if (!isTestoTecnico(text)) {
+                log.warn("[Scraper] Testo da '{}' scartato: mancano keyword tecniche. " +
+                         "Probabile pagina di listing/annunci, non una scheda tecnica.",
+                    source.name());
+                return Optional.empty();
+            }
+
             String enriched = "[FONTE: " + source.url() + "]\n" + text;
             return Optional.of(truncate(enriched, maxTextLength));
 
@@ -130,27 +141,33 @@ public class WebScraperService implements WebScraper {
     }
 
     // -----------------------------------------------
-    // ESTRAZIONE TESTO HTML
+    // VALIDATORE QUALITA' TESTO
     // -----------------------------------------------
 
     /**
-     * Estrae il testo rilevante da un Document Jsoup.
-     *
-     * Strategia:
-     * 1. Rimuove elementi non informativi (nav, header, footer, script, style, ads)
-     * 2. Cerca selettori specifici per schede tecniche
-     * 3. Fallback sul body completo
-     *
-     * L'output e' testo plain, piu' pulito possibile per ridurre
-     * il "rumore" che potrebbe confondere Gemini.
+     * Ritorna true se il testo contiene almeno 2 keyword tecniche.
+     * Difende dall'invio all'AI di testi inutili (listing annunci,
+     * pagine di ricerca, homepage) che causerebbero isValid()=false
+     * e un tentativo di salvataggio con dati null nel DB.
      */
+    boolean isTestoTecnico(String testo) {
+        if (testo == null || testo.isBlank()) return false;
+        String lower = testo.toLowerCase();
+        long count = KEYWORD_TECNICHE.stream()
+            .filter(lower::contains)
+            .count();
+        return count >= 2;
+    }
+
+    // -----------------------------------------------
+    // ESTRAZIONE TESTO HTML
+    // -----------------------------------------------
+
     private String extractRelevantText(Document doc, String sourceUrl) {
-        // Step 1 — rimuovi noise
         doc.select("nav, header, footer, script, style, iframe, noscript, " +
                    ".cookie-banner, .ads, .advertisement, #cookie, " +
                    ".social-share, .newsletter, .related-articles").remove();
 
-        // Step 2 — selettori ottimistici per schede tecniche
         String[] technicalSelectors = {
             ".scheda-tecnica",
             ".technical-specs",
@@ -175,7 +192,6 @@ public class WebScraperService implements WebScraper {
             }
         }
 
-        // Step 3 — fallback: intero body
         Element body = doc.body();
         return body != null ? body.text().trim() : "";
     }
@@ -184,21 +200,21 @@ public class WebScraperService implements WebScraper {
     // URL BUILDERS
     // -----------------------------------------------
 
+    private String buildMotorOnlineUrl(String marca, String modello, int anno) {
+        // Formato: /scheda-tecnica/marca/modello/anno/
+        String m = slugify(marca);
+        String mod = slugify(modello);
+        return "https://www.motorionline.com/schede-tecniche/" + m + "/" + mod + "/";
+    }
+
     private String buildSchedaTecnicaUrl(String marca, String modello, int anno) {
-        // Formato: /marca/modello-anno/
         String m = slugify(marca);
         String mod = slugify(modello);
         return "https://www.schedatecnica.it/" + m + "/" + mod + "-" + anno + "/";
     }
 
-    private String buildAutoScout24Url(String marca, String modello, int anno) {
-        String q = encode(marca + " " + modello + " " + anno);
-        return "https://www.autoscout24.it/lst?q=" + q;
-    }
-
     private String buildGoogleSearchUrl(String query) {
-        // Cerca direttamente scheda tecnica su Google
-        String q = encode("scheda tecnica " + query + " consumi tagliando bollo");
+        String q = encode("scheda tecnica " + query + " consumi tagliando kw cilindrata");
         return "https://www.google.com/search?q=" + q;
     }
 
@@ -229,8 +245,5 @@ public class WebScraperService implements WebScraper {
     // INNER RECORD
     // -----------------------------------------------
 
-    /**
-     * Value object che rappresenta una singola fonte di scraping.
-     */
     public record ScraperSource(String name, String url) {}
 }

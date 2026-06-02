@@ -28,17 +28,13 @@ import java.util.Optional;
  *        ↓
  *   AiCarDataExtractor      ← Gemini mappa testo grezzo → CarDataDTO
  *        ↓
+ *   isValid()               ← blocca se AI non ha estratto i minimi
+ *        ↓
  *   deduplicazione DB       ← evita duplicati
  *        ↓
  *   CarDataMapper + save()  ← persiste Motorizzazione
  *        ↓
  *   MotorizzazioneResponseDTO
- *
- * Questo service e' anche il punto di ingresso per il CalcoloSostenibilitaService:
- * prima si assicura che i dati tecnici siano nel DB, poi il calcolo li legge.
- *
- * NOTA: inject WebScraper (interfaccia), non WebScraperService.
- * Questo permette di sostituire con un mock nei test senza Spring context.
  */
 @Service
 @RequiredArgsConstructor
@@ -56,19 +52,6 @@ public class AutoExtractionOrchestrator {
     // ENTRY POINT PRINCIPALE — usato dal Controller
     // -----------------------------------------------
 
-    /**
-     * Flusso completo da parametri utente a DB.
-     *
-     * <p>Prima controlla se i dati sono gia' nel DB (cache DB).
-     * Se si', evita scraping + AI call. Altrimenti esegue il flusso completo.
-     *
-     * @param marca   es. "Volkswagen"
-     * @param modello es. "Golf"
-     * @param motore  es. "2.0 TDI 150 CV DSG"
-     * @param anno    es. 2022
-     * @return DTO della motorizzazione salvata o gia' esistente
-     * @throws IllegalStateException se lo scraping non trova dati o l'AI fallisce
-     */
     @Transactional
     public MotorizzazioneResponseDTO estraiDaParametri(
             String marca, String modello, String motore, int anno) {
@@ -76,12 +59,11 @@ public class AutoExtractionOrchestrator {
         log.info("[Orchestratore] Richiesta estrazione: {} {} {} {}",
             marca, modello, motore, anno);
 
-        // --- Cache DB: verifica se esiste gia' ---
+        // --- Cache DB ---
         List<Motorizzazione> esistenti = motorizzazioneRepository
             .findByMarcaModelloAnno(marca, modello, anno);
 
         if (!esistenti.isEmpty()) {
-            // Cerca match esatto sul nome motore (case-insensitive)
             Optional<Motorizzazione> match = esistenti.stream()
                 .filter(m -> motore.equalsIgnoreCase(m.getNomeMotore()))
                 .findFirst();
@@ -99,7 +81,7 @@ public class AutoExtractionOrchestrator {
 
         String testoGrezzo = webScraper.scrape(marca, modello, motore, anno)
             .orElseThrow(() -> new IllegalStateException(
-                "Nessuna fonte web ha restituito dati per: "
+                "Nessuna fonte web ha restituito dati tecnici per: "
                 + marca + " " + modello + " " + motore + " (" + anno + ")."
                 + " Prova a verificare marca/modello/anno o inserisci i dati manualmente."
             ));
@@ -111,13 +93,6 @@ public class AutoExtractionOrchestrator {
     // ENTRY POINT SECONDARIO — per URL diretti (admin/debug)
     // -----------------------------------------------
 
-    /**
-     * Flusso da URL diretto (es. link a una scheda tecnica specifica).
-     * Utile per arricchire il DB manualmente o da job schedulati.
-     *
-     * @param url       URL della pagina da scrapare
-     * @param fonteDati etichetta della fonte da salvare in DB
-     */
     @Transactional
     public MotorizzazioneResponseDTO estraiDaUrl(String url, String fonteDati) {
         log.info("[Orchestratore] Estrazione da URL: {}", url);
@@ -129,35 +104,40 @@ public class AutoExtractionOrchestrator {
     // INNER — da testo grezzo a DB
     // -----------------------------------------------
 
-    /**
-     * Dato un testo grezzo gia' disponibile, esegue AI extraction + persist.
-     * Usato internamente da estraiDaParametri() dopo lo scraping.
-     */
     @Transactional
     public MotorizzazioneResponseDTO estraiDaTesto(String testoGrezzo, String fonteDati) {
         // Step 1: AI extraction
         CarDataDTO dto = aiExtractor.extractCarData(testoGrezzo);
-        log.info("[AI] Estratto: {} {} {} ({})",
-            dto.marca(), dto.modello(), dto.nomeMotore(), dto.annoProduzione());
+        log.info("[AI] Estratto: marca='{}' modello='{}' motore='{}' anno={} carburante='{}'",
+            dto.marca(), dto.modello(), dto.nomeMotore(), dto.annoProduzione(), dto.tipoCarburante());
 
-        // Step 2: Validazione minima output AI
+        // Step 2: Validazione minima — BLOCCA se l'AI non ha estratto i dati fondamentali.
+        // NOTA: isValid() difende anche contro la stringa letterale "null" che Gemini
+        // puo' restituire al posto di un vero null Java quando il testo sorgente
+        // non contiene una scheda tecnica valida (es. listing annunci di AutoScout24).
         if (!dto.isValid()) {
+            log.warn("[AI] Dati insufficienti — salvataggio bloccato. " +
+                     "DTO ricevuto: marca='{}' modello='{}' motore='{}' kw={} carburante='{}'. " +
+                     "Probabile causa: il testo sorgente non contiene una scheda tecnica strutturata.",
+                dto.marca(), dto.modello(), dto.nomeMotore(), dto.potenzaKw(), dto.tipoCarburante());
             throw new IllegalStateException(
-                "L'AI non ha estratto i campi minimi obbligatori (marca, modello, potenzaKw, tipoCarburante). "
-                + "Il testo sorgente potrebbe non contenere una scheda tecnica valida.");
+                "L'AI non ha estratto i campi minimi obbligatori (marca, modello, nomeMotore, potenzaKw, tipoCarburante). " +
+                "Il testo sorgente potrebbe non contenere una scheda tecnica valida. " +
+                "Prova con marca/modello/anno diversi o inserisci i dati manualmente."
+            );
         }
 
-        // Step 3: Deduplicazione fine (marca+modello+anno)
+        // Step 3: Deduplicazione
         List<Motorizzazione> esistenti = motorizzazioneRepository
             .findByMarcaModelloAnno(dto.marca(), dto.modello(), dto.annoProduzione());
 
         if (!esistenti.isEmpty()) {
             log.info("[Orchestratore] Dedup: motorizzazione gia' presente (id={})",
-                esistenti.get(0).getId());  // FIX: get(0) invece di getFirst() — compatibile Java 17
+                esistenti.get(0).getId());
             return carDataMapper.toResponseDTO(esistenti.get(0));
         }
 
-        // Step 4: Risolve/crea Marca (find-or-create)
+        // Step 4: Risolve/crea Marca
         Marca marca = marcaRepository.findByNomeIgnoreCase(dto.marca())
             .orElseGet(() -> {
                 log.info("[DB] Creazione nuova marca: {}", dto.marca());
@@ -165,7 +145,7 @@ public class AutoExtractionOrchestrator {
                     Marca.builder().nome(capitalizza(dto.marca())).build());
             });
 
-        // Step 5: Risolve/crea Modello (find-or-create)
+        // Step 5: Risolve/crea Modello
         Modello modello = modelloRepository
             .findByMarcaIdAndNomeIgnoreCase(marca.getId(), dto.modello())
             .orElseGet(() -> {
@@ -178,7 +158,7 @@ public class AutoExtractionOrchestrator {
                         .build());
             });
 
-        // Step 6: Mappa DTO → entita' e persisti
+        // Step 6: Mappa + persisti
         Motorizzazione motorizzazione = carDataMapper.toEntity(dto, modello);
         motorizzazione.setFonteDati(fonteDati);
         Motorizzazione salvata = motorizzazioneRepository.save(motorizzazione);
@@ -191,7 +171,6 @@ public class AutoExtractionOrchestrator {
     // UTILITY
     // -----------------------------------------------
 
-    /** Capitalizza correttamente: "volkswagen" → "Volkswagen" */
     private String capitalizza(String nome) {
         if (nome == null || nome.isBlank()) return nome;
         String t = nome.trim();
