@@ -1,5 +1,6 @@
 package com.santofem.redditoauto.scraper;
 
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
@@ -16,25 +17,21 @@ import java.util.Optional;
 import java.util.Set;
 
 /**
- * WebScraperService - multi-fonte con HTML statico.
+ * WebScraperService - orchestratore multi-fonte.
  *
- * automoto.it e' stato rimosso: il sito usa React/Vue e i dati versione
- * vengono caricati via JavaScript, Jsoup non riesce a vederli.
- *
- * FONTI (in ordine di priorita', tutte con HTML statico):
- * 1. auto.it          - schede tecniche italiane, HTML statico
- * 2. motorbox.com     - schede italiane, statico
- * 3. dati.guru        - aggregatore schede tecniche, statico
- * 4. car.info         - aggregatore EU multilingua, statico
- * 5. Bing search      - fallback: scarica la pagina risultati di ricerca
- *
- * FILTRO isTestoTecnico():
- * - Passa subito se contiene almeno 1 keyword numerica (l/100, cc, nm...)
- * - Altrimenti serve almeno 4 keyword generiche
+ * ORDINE FONTI:
+ * 1. auto-data.net (navigazione a cascata 4 livelli - fonte primaria)
+ * 2. auto.it       (HTML statico)
+ * 3. motorbox.com  (HTML statico)
+ * 4. dati.guru     (aggregatore EU)
+ * 5. Bing search   (fallback testuale)
  */
 @Service
 @Slf4j
+@RequiredArgsConstructor
 public class WebScraperService implements WebScraper {
+
+    private final AutoDataNetScraper autoDataNetScraper;
 
     @Value("${scraper.timeout-ms:8000}")
     private int timeoutMs;
@@ -69,7 +66,31 @@ public class WebScraperService implements WebScraper {
     public Optional<String> scrape(String marca, String modello, String motore, int anno) {
         log.info("[Scraper] Avvio ricerca per: {} {} {} {}", marca, modello, motore, anno);
 
-        List<ScraperSource> sources = buildSources(marca, modello, motore, anno);
+        // FONTE PRIMARIA: auto-data.net con navigazione a cascata
+        Optional<String> adnResult = autoDataNetScraper.scrape(marca, modello, motore, anno);
+        if (adnResult.isPresent()) {
+            log.info("[Scraper] Testo tecnico trovato da 'auto-data.net' ({} chars)",
+                adnResult.get().length());
+            return adnResult;
+        }
+
+        // FONTI SECONDARIE: HTML statico
+        List<ScraperSource> sources = List.of(
+            new ScraperSource("auto.it",
+                "https://www.auto.it/schede_tecniche/"
+                    + slugify(marca) + "/" + slugify(modello) + "/" + anno + "/"),
+            new ScraperSource("motorbox.com",
+                "https://www.motorbox.com/auto/scheda-tecnica/"
+                    + slugify(marca) + "/" + slugify(modello) + "-" + anno + "/"),
+            new ScraperSource("dati.guru",
+                "https://www.dati.guru/it/"
+                    + slugify(marca) + "/" + slugify(modello) + "/" + anno + "/"),
+            new ScraperSource("Bing",
+                "https://www.bing.com/search?q="
+                    + encode("scheda tecnica " + marca + " " + modello
+                        + " " + motore + " " + anno
+                        + " consumi kw cilindrata l/100km"))
+        );
 
         for (ScraperSource source : sources) {
             Optional<String> result = fetchAndParse(source);
@@ -86,53 +107,12 @@ public class WebScraperService implements WebScraper {
     }
 
     // -----------------------------------------------
-    // ELENCO FONTI
-    // -----------------------------------------------
-
-    private List<ScraperSource> buildSources(String marca, String modello, String motore, int anno) {
-        return List.of(
-            // auto.it: /schede_tecniche/marca/modello/anno/
-            new ScraperSource("auto.it",
-                "https://www.auto.it/schede_tecniche/"
-                    + slugify(marca) + "/" + slugify(modello) + "/" + anno + "/"),
-
-            // motorbox: /auto/scheda-tecnica/marca/modello-anno/
-            new ScraperSource("motorbox.com",
-                "https://www.motorbox.com/auto/scheda-tecnica/"
-                    + slugify(marca) + "/" + slugify(modello) + "-" + anno + "/"),
-
-            // dati.guru: /it/marca/modello/anno/
-            new ScraperSource("dati.guru",
-                "https://www.dati.guru/it/"
-                    + slugify(marca) + "/" + slugify(modello) + "/" + anno + "/"),
-
-            // car.info: /it/marca/modello-anno/
-            new ScraperSource("car.info",
-                "https://www.car.info/it-it/" + slugify(marca)
-                    + "/" + slugify(modello) + "-" + anno),
-
-            // auto-data.net: buon aggregatore EU con HTML statico
-            new ScraperSource("auto-data.net",
-                "https://www.auto-data.net/it/" + slugify(marca)
-                    + "-" + slugify(modello) + "-" + anno + "-specs-1.html"),
-
-            // Bing search fallback: scarica testo risultati di ricerca
-            new ScraperSource("Bing",
-                "https://www.bing.com/search?q="
-                    + encode("scheda tecnica " + marca + " " + modello
-                        + " " + motore + " " + anno
-                        + " consumi kw cilindrata l/100km"))
-        );
-    }
-
-    // -----------------------------------------------
-    // FETCH + PARSE
+    // FETCH + PARSE GENERICO
     // -----------------------------------------------
 
     Optional<String> fetchAndParse(ScraperSource source) {
         try {
             log.debug("[Scraper] Fetch '{}': {}", source.name(), source.url());
-
             Document doc = Jsoup.connect(source.url())
                 .userAgent(userAgent)
                 .timeout(timeoutMs)
@@ -188,20 +168,15 @@ public class WebScraperService implements WebScraper {
     private String extractRelevantText(Document doc) {
         doc.select("nav, header, footer, script, style, iframe, noscript, " +
                    ".cookie-banner, .ads, .advertisement, #cookie, " +
-                   ".social-share, .newsletter, .related-articles, " +
-                   ".sidebar, .menu, .breadcrumb, .pagination").remove();
+                   ".social-share, .newsletter, .sidebar, .menu, " +
+                   ".breadcrumb, .pagination").remove();
 
-        // Selettori specifici per schede tecniche, dal piu' specifico al piu' generico
         String[] selectors = {
-            // Selettori semantici specifici
             ".scheda-tecnica", ".technical-specs", ".specs-table",
             ".specs-container", ".car-specs", ".dati-tecnici",
             "#specifiche-tecniche", "#dati-tecnici", "[data-specs]",
             ".scheda", ".tecnica", ".caratteristiche", ".specifiche",
-            // Elementi strutturali con dati tabulari
-            "table", "dl",
-            // Container generici
-            "article", "main", ".content", "#content", ".container"
+            "table", "dl", "article", "main", ".content", "#content"
         };
 
         for (String selector : selectors) {
