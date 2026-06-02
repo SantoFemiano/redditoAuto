@@ -22,19 +22,6 @@ import java.util.List;
 import java.util.Optional;
 import java.util.function.Supplier;
 
-/**
- * Orchestratore del flusso completo di estrazione dati auto.
- *
- * FLUSSO:
- *   1. Cache DB check
- *   2. WebScraper.scrape()  → se OK: AiCarDataExtractor estrae dal testo
- *   3. Fallback AI-direct   → se scraping fallisce: AiDirectDataProvider
- *   4. isValid() + dedup + persist
- *
- * GESTIONE ERRORI AI:
- *   - RuntimeException con messaggio "503" → Gemini sovraccarico → GeminiUnavailableException → HTTP 503
- *   - DTO con campi null dopo chiamata AI → dati insufficienti → HTTP 422
- */
 @Service
 @RequiredArgsConstructor
 @Slf4j
@@ -78,9 +65,13 @@ public class AutoExtractionOrchestrator {
         String fonteDati;
 
         if (testoOpt.isPresent()) {
-            log.info("[Orchestratore] Scraping riuscito, invio testo all'AI extractor");
-            dto = callAiSafely(() -> aiExtractor.extractCarData(testoOpt.get()));
-            fonteDati = "scraping:" + marca + ":" + modello + ":" + anno;
+            log.info("[Orchestratore] Scraping riuscito ({} chars), invio all'AI extractor",
+                testoOpt.get().length());
+            // Passa marca/modello/motore/anno come contesto esplicito
+            // cosi' l'AI non li deve indovinare dal testo grezzo
+            dto = callAiSafely(() -> aiExtractor.extractCarData(
+                marca, modello, motore, String.valueOf(anno), testoOpt.get()));
+            fonteDati = "scraping:auto-data.net:" + marca + ":" + modello + ":" + anno;
         } else {
             log.warn("[Orchestratore] Scraping fallito. Fallback AI-direct per {} {} {} {}",
                 marca, modello, motore, anno);
@@ -93,28 +84,17 @@ public class AutoExtractionOrchestrator {
     }
 
     @Transactional
-    public MotorizzazioneResponseDTO estraiDaUrl(String url, String fonteDati) {
-        log.info("[Orchestratore] Estrazione da URL: {}", url);
-        throw new UnsupportedOperationException(
-            "estraiDaUrl() non ancora implementato. Usa estraiDaParametri() invece.");
-    }
-
-    @Transactional
     public MotorizzazioneResponseDTO estraiDaTesto(String testoGrezzo, String fonteDati) {
-        CarDataDTO dto = callAiSafely(() -> aiExtractor.extractCarData(testoGrezzo));
+        // Fallback senza contesto: usato solo per endpoint dedicato
+        CarDataDTO dto = callAiSafely(() -> aiExtractor.extractCarData(
+            "sconosciuta", "sconosciuto", "sconosciuto", "0", testoGrezzo));
         return persistiDto(dto, fonteDati);
     }
 
     // -----------------------------------------------
-    // WRAPPER AI: intercetta 503 prima che diventi DTO vuoto
+    // WRAPPER AI
     // -----------------------------------------------
 
-    /**
-     * Esegue una chiamata AI wrappandola in try/catch.
-     * Se LangChain4j lancia RuntimeException con "503" nel messaggio
-     * (dopo aver esaurito i retry), propaga GeminiUnavailableException
-     * invece di tornare un DTO vuoto con null ovunque.
-     */
     private CarDataDTO callAiSafely(Supplier<CarDataDTO> aiCall) {
         try {
             return aiCall.get();
@@ -123,7 +103,7 @@ public class AutoExtractionOrchestrator {
             if (msg.contains("503") || msg.contains("UNAVAILABLE") || msg.contains("high demand")) {
                 log.error("[AI] Gemini 503 dopo tutti i retry: {}", msg);
                 throw new GeminiUnavailableException(
-                    "Il servizio AI è temporaneamente sovraccarico. Riprova tra qualche secondo.", ex);
+                    "Il servizio AI e' temporaneamente sovraccarico. Riprova tra qualche secondo.", ex);
             }
             log.error("[AI] Errore chiamata Gemini: {}", msg);
             throw ex;
@@ -131,7 +111,7 @@ public class AutoExtractionOrchestrator {
     }
 
     // -----------------------------------------------
-    // LOGICA COMUNE: validazione + dedup + persist
+    // VALIDAZIONE + DEDUP + PERSIST
     // -----------------------------------------------
 
     private MotorizzazioneResponseDTO persistiDto(CarDataDTO dto, String fonteDati) {
@@ -182,7 +162,8 @@ public class AutoExtractionOrchestrator {
         motorizzazione.setFonteDati(fonteDati);
         Motorizzazione salvata = motorizzazioneRepository.save(motorizzazione);
 
-        log.info("[DB] Nuova motorizzazione salvata id={} (fonte: {})", salvata.getId(), fonteDati);
+        log.info("[DB] Nuova motorizzazione salvata id={} (fonte: {})",
+            salvata.getId(), fonteDati);
         return carDataMapper.toResponseDTO(salvata);
     }
 
