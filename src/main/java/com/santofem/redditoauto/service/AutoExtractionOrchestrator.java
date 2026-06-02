@@ -23,25 +23,12 @@ import java.util.Optional;
 /**
  * Orchestratore del flusso completo di estrazione dati auto.
  *
- * FLUSSO COMPLETO:
- *
- *   [marca + modello + motore + anno]
- *        ↓
- *   1. Cache DB check          ← evita scraping se già presente
- *        ↓ (miss)
- *   2. WebScraper.scrape()     ← cerca testo grezzo su siti tecnici
- *        ↓ (testo trovato)
- *   3. AiCarDataExtractor      ← Gemini estrae dati dal testo
- *        ↓ (scraping fallito / testi bloccati)
- *   2b. AiDirectDataProvider   ← Gemini genera dati dal suo training set
- *        ↓
- *   4. isValid() check         ← blocca se dati insufficienti
- *        ↓
- *   5. Deduplicazione DB
- *        ↓
- *   6. CarDataMapper + save()
- *        ↓
- *   MotorizzazioneResponseDTO
+ * FLUSSO:
+ *   1. Cache DB check
+ *   2. WebScraper.scrape()  → se OK: AiCarDataExtractor estrae dal testo
+ *   3. Fallback AI-direct   → se scraping fallisce: AiDirectDataProvider
+ *      genera i dati dal training set di Gemini
+ *   4. isValid() + dedup + persist
  */
 @Service
 @RequiredArgsConstructor
@@ -56,10 +43,6 @@ public class AutoExtractionOrchestrator {
     private final ModelloRepository modelloRepository;
     private final MotorizzazioneRepository motorizzazioneRepository;
 
-    // -----------------------------------------------
-    // ENTRY POINT PRINCIPALE
-    // -----------------------------------------------
-
     @Transactional
     public MotorizzazioneResponseDTO estraiDaParametri(
             String marca, String modello, String motore, int anno) {
@@ -67,7 +50,7 @@ public class AutoExtractionOrchestrator {
         log.info("[Orchestratore] Richiesta estrazione: {} {} {} {}",
             marca, modello, motore, anno);
 
-        // --- 1. Cache DB ---
+        // 1. Cache DB
         List<Motorizzazione> esistenti = motorizzazioneRepository
             .findByMarcaModelloAnno(marca, modello, anno);
 
@@ -75,43 +58,36 @@ public class AutoExtractionOrchestrator {
             Optional<Motorizzazione> match = esistenti.stream()
                 .filter(m -> motore.equalsIgnoreCase(m.getNomeMotore()))
                 .findFirst();
-
             if (match.isPresent()) {
-                log.info("[Orchestratore] Cache hit: motorizzazione id={} gia' presente",
-                    match.get().getId());
+                log.info("[Orchestratore] Cache hit: motorizzazione id={}", match.get().getId());
                 return carDataMapper.toResponseDTO(match.get());
             }
         }
 
-        log.info("[Orchestratore] Cache miss: avvio scraping per {} {} {}",
-            marca, modello, motore);
+        log.info("[Orchestratore] Cache miss: avvio scraping per {} {} {}", marca, modello, motore);
 
-        // --- 2. Tenta scraping web ---
+        // 2. Scraping web
         Optional<String> testoOpt = webScraper.scrape(marca, modello, motore, anno);
 
         CarDataDTO dto;
         String fonteDati;
 
         if (testoOpt.isPresent()) {
-            // --- 3a. Scraping OK: AI estrae dal testo ---
+            // 3a. Scraping OK: AI estrae dal testo
             log.info("[Orchestratore] Scraping riuscito, invio testo all'AI extractor");
             dto = aiExtractor.extractCarData(testoOpt.get());
             fonteDati = "scraping:" + marca + ":" + modello + ":" + anno;
         } else {
-            // --- 3b. Scraping fallito: AI genera direttamente dal training set ---
-            log.warn("[Orchestratore] Scraping fallito (bot-protection / SSL). " +
-                     "Fallback: chiedo dati direttamente a Gemini per {} {} {} {}",
+            // 3b. Fallback: AI genera direttamente
+            // NOTA: anno passato come String perche' LangChain4j @V non gestisce primitivi
+            log.warn("[Orchestratore] Scraping fallito. Fallback AI-direct per {} {} {} {}",
                 marca, modello, motore, anno);
-            dto = aiDirectProvider.getCarData(marca, modello, motore, anno);
+            dto = aiDirectProvider.getCarData(marca, modello, motore, String.valueOf(anno));
             fonteDati = "ai-direct:" + marca + ":" + modello + ":" + anno;
         }
 
         return persistiDto(dto, fonteDati);
     }
-
-    // -----------------------------------------------
-    // ENTRY POINT SECONDARIO
-    // -----------------------------------------------
 
     @Transactional
     public MotorizzazioneResponseDTO estraiDaUrl(String url, String fonteDati) {
@@ -119,10 +95,6 @@ public class AutoExtractionOrchestrator {
         throw new UnsupportedOperationException(
             "estraiDaUrl() non ancora implementato. Usa estraiDaParametri() invece.");
     }
-
-    // -----------------------------------------------
-    // INNER — da testo grezzo a DB (usato da test/debug)
-    // -----------------------------------------------
 
     @Transactional
     public MotorizzazioneResponseDTO estraiDaTesto(String testoGrezzo, String fonteDati) {
@@ -139,14 +111,12 @@ public class AutoExtractionOrchestrator {
             dto.marca(), dto.modello(), dto.nomeMotore(), dto.annoProduzione(),
             dto.tipoCarburante(), dto.potenzaKw());
 
-        // Validazione minima
         if (!dto.isValid()) {
-            log.warn("[AI] Dati insufficienti — salvataggio bloccato. " +
-                     "DTO: marca='{}' modello='{}' motore='{}' kw={} carburante='{}'. " +
-                     "Controlla la configurazione Gemini o verifica marca/modello/anno.",
-                dto.marca(), dto.modello(), dto.nomeMotore(), dto.potenzaKw(), dto.tipoCarburante());
+            log.warn("[AI] Dati insufficienti - salvataggio bloccato. " +
+                     "DTO: marca='{}' modello='{}' kw={} carburante='{}'.",
+                dto.marca(), dto.modello(), dto.potenzaKw(), dto.tipoCarburante());
             throw new IllegalStateException(
-                "L'AI non ha estratto i campi minimi obbligatori (marca, modello, nomeMotore, potenzaKw, tipoCarburante). " +
+                "L'AI non ha estratto i campi minimi obbligatori. " +
                 "Controlla che marca/modello/anno siano corretti."
             );
         }
@@ -154,10 +124,8 @@ public class AutoExtractionOrchestrator {
         // Deduplicazione
         List<Motorizzazione> esistenti = motorizzazioneRepository
             .findByMarcaModelloAnno(dto.marca(), dto.modello(), dto.annoProduzione());
-
         if (!esistenti.isEmpty()) {
-            log.info("[Orchestratore] Dedup: motorizzazione gia' presente (id={})",
-                esistenti.get(0).getId());
+            log.info("[Orchestratore] Dedup: id={}", esistenti.get(0).getId());
             return carDataMapper.toResponseDTO(esistenti.get(0));
         }
 
@@ -187,14 +155,9 @@ public class AutoExtractionOrchestrator {
         motorizzazione.setFonteDati(fonteDati);
         Motorizzazione salvata = motorizzazioneRepository.save(motorizzazione);
 
-        log.info("[DB] Nuova motorizzazione salvata con id={} (fonte: {})",
-            salvata.getId(), fonteDati);
+        log.info("[DB] Nuova motorizzazione salvata id={} (fonte: {})", salvata.getId(), fonteDati);
         return carDataMapper.toResponseDTO(salvata);
     }
-
-    // -----------------------------------------------
-    // UTILITY
-    // -----------------------------------------------
 
     private String capitalizza(String nome) {
         if (nome == null || nome.isBlank()) return nome;

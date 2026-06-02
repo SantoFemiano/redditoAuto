@@ -9,23 +9,21 @@ import dev.langchain4j.service.V;
  * AiService LangChain4j per la generazione DIRETTA di dati tecnici auto.
  *
  * QUANDO SI USA:
- * Quando il WebScraper non riesce a trovare dati (tutti i siti bloccano
- * il bot, errori SSL, testo troppo corto) questo service chiede direttamente
- * a Gemini di usare il suo training set per fornire i dati tecnici ufficiali.
+ * Quando il WebScraper non riesce a trovare dati (bot-protection, errori SSL,
+ * testi troppo corti) questo service chiede direttamente a Gemini di usare
+ * il suo training set per fornire i dati tecnici ufficiali.
  *
- * DIFFERENZA DA AiCarDataExtractor:
- * - AiCarDataExtractor: estrae dati DA un testo grezzo fornito
- * - AiDirectDataProvider: genera dati DA ZERO basandosi su marca/modello/anno/motore
+ * NOTA SUI TIPI DEI PARAMETRI @V:
+ * LangChain4j non sostituisce correttamente i primitivi (int, double)
+ * nelle template variables del @UserMessage. Il parametro rimane
+ * la stringa letterale '{nomeVariabile}' invece del valore reale.
+ * TUTTI i parametri @V devono essere String. La conversione avviene nel chiamante
+ * (es. String.valueOf(anno) in AutoExtractionOrchestrator).
  *
- * IMPORTANTE:
- * Gemini potrebbe avere dati imprecisi o non aggiornatissimi.
- * I record salvati da questo provider hanno confermato_manualmente=false
- * e fonte_dati=ai-direct per permettere revisione successiva.
- *
- * ANTI-ALLUCINAZIONE:
- * - temperature=0.0 (LangChain4jConfig)
- * - Il prompt chiede valori ufficiali WLTP/omologati, non stime
- * - Campi sconosciuti devono essere null
+ * I record salvati tramite questo provider hanno:
+ * - confermato_manualmente = false
+ * - fonte_dati = "ai-direct:marca:modello:anno"
+ * per permettere revisione e correzione successiva.
  */
 public interface AiDirectDataProvider {
 
@@ -63,6 +61,6 @@ public interface AiDirectDataProvider {
         @V("marca") String marca,
         @V("modello") String modello,
         @V("motore") String motore,
-        @V("anno") int anno
+        @V("anno") String anno
     );
 }
