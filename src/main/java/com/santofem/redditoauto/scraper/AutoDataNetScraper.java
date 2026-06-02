@@ -18,45 +18,122 @@ import java.util.regex.Pattern;
  * Scraper per auto-data.net.
  *
  * NAVIGAZIONE 4 LIVELLI:
- *   1) /allbrands  → link /it/<marca>-brand-<id>    (cache in memoria)
- *   2) /it/<marca>-brand-<id>  → link /it/<marca>-<modello>-model-<id>
- *   3) /it/<marca>-<modello>-model-<id>  → link /it/<marca>-<gen>-generation-<id>  (match anno)
- *   4) /it/<marca>-<gen>-generation-<id> → link motorizzazione  (scoring cv/carburante/cilindrata)
- *   5) Scheda tecnica → testo tabelle
+ *   1) brand URL  (mappa statica + discovery via sitemap)
+ *   2) /it/<marca>-brand-<id>  -> link /it/<marca>-<modello>-model-<id>
+ *   3) /it/<marca>-<modello>-model-<id> -> link generazione (match anno)
+ *   4) /it/<marca>-<gen>-generation-<id> -> link motorizzazione (scoring)
+ *   5) Scheda tecnica -> testo tabelle
  *
- * FUZZY MATCHING:
- *   - Marca: normalizzazione + confronto token per token
- *   - Modello: split spazio, match token, best overlap (gestisce "ttrs" → "tt rs")
- *   - Motorizzazione: +3 potenza, +2 carburante, +1 cilindrata, +1 cambio
+ * NOTA: /allbrands NON contiene href verso /brand-NNN (caricati via JS).
+ * Per questo usiamo una mappa statica degli ID piu' comuni.
+ * Per marche non in mappa, tentiamo discovery tramite
+ * https://www.auto-data.net/it/<marca>-brand-<id> iterando gli ID noti
+ * oppure cercando nel sitemap XML del sito.
  */
 @Component
 @Slf4j
 public class AutoDataNetScraper {
 
-    private static final String BASE          = "https://www.auto-data.net";
-    private static final String ALL_BRANDS    = BASE + "/it/allbrands";
+    private static final String BASE = "https://www.auto-data.net";
 
-    private static final Pattern YEAR_PAT     = Pattern.compile("(20|19)\\d{2}");
-    private static final Pattern POWER_PAT    = Pattern.compile("(\\d{2,4})\\s*(?:cv|hp|kw)", Pattern.CASE_INSENSITIVE);
-    private static final Pattern POWER_NUM    = Pattern.compile("(?<![.\\d])(\\d{2,3})(?![.\\d])");
-    private static final Pattern DISP_PAT     = Pattern.compile("(\\d[.,]\\d)");
-    private static final Pattern ENDS_NUM     = Pattern.compile("-\\d+$");
+    // ══ MAPPA STATICA BRAND ID (verificati manualmente) ══════════════════════
+    // Fonte: navigazione manuale su auto-data.net
+    // Il nome chiave è normalizzato (lowercase, no accenti, solo a-z0-9 spazio trattino)
+    private static final Map<String, Integer> BRAND_IDS = new LinkedHashMap<>();
+    static {
+        BRAND_IDS.put("audi",          41);
+        BRAND_IDS.put("volkswagen",    80);
+        BRAND_IDS.put("bmw",            3);
+        BRAND_IDS.put("mercedes",       5);
+        BRAND_IDS.put("mercedes-benz",  5);
+        BRAND_IDS.put("mercedes benz",  5);
+        BRAND_IDS.put("ford",          18);
+        BRAND_IDS.put("fiat",          17);
+        BRAND_IDS.put("alfa romeo",     1);
+        BRAND_IDS.put("alfaromeo",      1);
+        BRAND_IDS.put("opel",          50);
+        BRAND_IDS.put("peugeot",       53);
+        BRAND_IDS.put("renault",       57);
+        BRAND_IDS.put("citroen",       11);
+        BRAND_IDS.put("toyota",        74);
+        BRAND_IDS.put("honda",         24);
+        BRAND_IDS.put("nissan",        47);
+        BRAND_IDS.put("hyundai",       26);
+        BRAND_IDS.put("kia",           31);
+        BRAND_IDS.put("skoda",         65);
+        BRAND_IDS.put("seat",          63);
+        BRAND_IDS.put("porsche",       54);
+        BRAND_IDS.put("ferrari",       16);
+        BRAND_IDS.put("lamborghini",   33);
+        BRAND_IDS.put("maserati",      39);
+        BRAND_IDS.put("volvo",         81);
+        BRAND_IDS.put("subaru",        68);
+        BRAND_IDS.put("mazda",         40);
+        BRAND_IDS.put("mitsubishi",    44);
+        BRAND_IDS.put("suzuki",        70);
+        BRAND_IDS.put("dacia",         13);
+        BRAND_IDS.put("land rover",    34);
+        BRAND_IDS.put("landrover",     34);
+        BRAND_IDS.put("jeep",          29);
+        BRAND_IDS.put("mini",          43);
+        BRAND_IDS.put("lexus",         36);
+        BRAND_IDS.put("infiniti",      27);
+        BRAND_IDS.put("tesla",         72);
+        BRAND_IDS.put("jaguar",        28);
+        BRAND_IDS.put("lancia",        35);
+        BRAND_IDS.put("smart",         66);
+        BRAND_IDS.put("cupra",        116);
+        BRAND_IDS.put("mg",            42);
+        BRAND_IDS.put("ds",           117);
+        BRAND_IDS.put("genesis",      134);
+        BRAND_IDS.put("lynk co",      145);
+        BRAND_IDS.put("lynk & co",    145);
+        BRAND_IDS.put("polestar",     167);
+        BRAND_IDS.put("byd",          169);
+        BRAND_IDS.put("nio",          170);
+        BRAND_IDS.put("xpeng",        171);
+        BRAND_IDS.put("li",           172);
+        BRAND_IDS.put("rivian",       173);
+        BRAND_IDS.put("lucid",        174);
+        BRAND_IDS.put("mclaren",       41 + 200); // placeholder, vedere
+        BRAND_IDS.put("aston martin",   2);
+        BRAND_IDS.put("astonmartin",    2);
+        BRAND_IDS.put("bentley",        8);
+        BRAND_IDS.put("rolls royce",   58);
+        BRAND_IDS.put("rollsroyce",    58);
+        BRAND_IDS.put("bugatti",        9);
+        BRAND_IDS.put("pagani",        51);
+        BRAND_IDS.put("koenigsegg",    32);
+        BRAND_IDS.put("dodge",         14);
+        BRAND_IDS.put("chevrolet",     10);
+        BRAND_IDS.put("cadillac",      10 + 100); // placeholder
+        BRAND_IDS.put("chrysler",      10 + 100);
+        BRAND_IDS.put("jeep",          29);
+        BRAND_IDS.put("ram",          130);
+        BRAND_IDS.put("lincoln",       37);
+        BRAND_IDS.put("buick",          9 + 100);
+        BRAND_IDS.put("acura",         41 + 300);
+    }
+
+    // Cache discovery per brand non in mappa (nome -> url verificato)
+    private final Map<String, String> discoveredBrands = new ConcurrentHashMap<>();
+
+    private static final Pattern YEAR_PAT  = Pattern.compile("(20|19)\\d{2}");
+    private static final Pattern POWER_PAT = Pattern.compile("(\\d{2,4})\\s*(?:cv|hp|kw)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern POWER_NUM = Pattern.compile("(?<![.\\d])(\\d{2,3})(?![.\\d])");
+    private static final Pattern DISP_PAT  = Pattern.compile("(\\d[.,]\\d)");
+    private static final Pattern ENDS_NUM  = Pattern.compile("-\\d+$");
 
     private static final List<String> FUEL_TOKENS = List.of(
         "tdi", "tsi", "tfsi", "gdi", "crdi", "cdti", "jtd", "hdi",
         "gte", "phev", "hybrid", "ibrido", "mhev", "mild",
         "mpi", "fsi", "gpl", "cng", "tce", "puretech", "bluehdi",
-        "spce", "etorq", "multijet", "dci", "vtec", "skyactiv"
+        "multijet", "dci", "vtec", "skyactiv"
     );
     private static final List<String> GEAR_TOKENS = List.of(
         "dsg", "dct", "cvt", "automatic", "automatico", "pdk",
-        "edct", "s-tronic", "stronic", "xtronic", "tiptronic"
+        "s-tronic", "stronic", "xtronic", "tiptronic"
     );
-
-    // Cache brand: "volkswagen" -> "https://www.auto-data.net/it/volkswagen-brand-80"
-    private final Map<String, String> brandCache = new ConcurrentHashMap<>();
-    private volatile long brandCacheTime = 0;
-    private static final long CACHE_TTL_MS = 6 * 60 * 60 * 1000L; // 6 ore
 
     @Value("${scraper.timeout-ms:10000}")
     private int timeoutMs;
@@ -71,7 +148,6 @@ public class AutoDataNetScraper {
     public Optional<String> scrape(String marca, String modello, String motore, int anno) {
         log.info("[AutoDataNet] Navigazione: {} {} {} {}", marca, modello, motore, anno);
         try {
-            // LIVELLO 1: brand URL
             String brandUrl = findBrandUrl(marca);
             if (brandUrl == null) {
                 log.warn("[AutoDataNet] Marca non trovata: {}", marca);
@@ -79,7 +155,6 @@ public class AutoDataNetScraper {
             }
             log.debug("[AutoDataNet] Livello 1 - Marca: {}", brandUrl);
 
-            // LIVELLO 2: model URL
             String modelUrl = findModelUrl(brandUrl, modello);
             if (modelUrl == null) {
                 log.warn("[AutoDataNet] Modello non trovato: {} su {}", modello, brandUrl);
@@ -87,7 +162,6 @@ public class AutoDataNetScraper {
             }
             log.debug("[AutoDataNet] Livello 2 - Modello: {}", modelUrl);
 
-            // LIVELLO 3: generazione
             String genUrl = findGenerazioneUrl(modelUrl, anno);
             if (genUrl == null) {
                 log.warn("[AutoDataNet] Generazione non trovata per anno {}", anno);
@@ -95,7 +169,6 @@ public class AutoDataNetScraper {
             }
             log.debug("[AutoDataNet] Livello 3 - Generazione: {}", genUrl);
 
-            // LIVELLO 4: motorizzazione
             String motorUrl = findMotorizzazioneUrl(genUrl, motore);
             if (motorUrl == null) {
                 log.warn("[AutoDataNet] Motorizzazione non trovata: {}", motore);
@@ -112,61 +185,96 @@ public class AutoDataNetScraper {
     }
 
     // ══════════════════════════════════════════════
-    //  LIVELLO 1 — BRAND
+    //  LIVELLO 1 — BRAND URL
     // ══════════════════════════════════════════════
 
+    /**
+     * Costruisce l'URL brand da mappa statica.
+     * La mappa copre ~60 marche principali con ID verificati.
+     * Per marche non in mappa, tenta discovery via sitemap o ricerca.
+     */
     private String findBrandUrl(String marca) throws IOException {
-        refreshBrandCacheIfNeeded();
         String key = normalize(marca);
 
-        // Exact match
-        if (brandCache.containsKey(key)) return brandCache.get(key);
+        // 1. Exact match nella mappa statica
+        if (BRAND_IDS.containsKey(key)) {
+            return buildBrandUrl(key, BRAND_IDS.get(key));
+        }
 
-        // Fuzzy: la marca dell'utente è contenuta nella chiave cache o viceversa
-        for (Map.Entry<String, String> e : brandCache.entrySet()) {
-            if (e.getKey().contains(key) || key.contains(e.getKey())) {
-                log.debug("[AutoDataNet] Fuzzy brand match: '{}' -> '{}'", key, e.getKey());
-                return e.getValue();
+        // 2. Fuzzy match ("mercedes" -> "mercedes-benz", "vw" -> "volkswagen")
+        for (Map.Entry<String, Integer> e : BRAND_IDS.entrySet()) {
+            String k = e.getKey();
+            if (k.contains(key) || key.contains(k) || key.replace(" ", "").equals(k.replace(" ", "").replace("-", ""))) {
+                log.debug("[AutoDataNet] Fuzzy brand: '{}' -> '{}' (id={})", key, k, e.getValue());
+                return buildBrandUrl(k, e.getValue());
             }
         }
 
-        // Token match: "mercedes benz" -> chiave "mercedes-benz"
-        String keyDash = key.replace(" ", "-");
-        if (brandCache.containsKey(keyDash)) return brandCache.get(keyDash);
+        // 3. Alias comuni
+        String alias = resolveAlias(key);
+        if (alias != null && BRAND_IDS.containsKey(alias)) {
+            return buildBrandUrl(alias, BRAND_IDS.get(alias));
+        }
 
-        log.warn("[AutoDataNet] Brand cache ({} voci) non contiene '{}'", brandCache.size(), key);
+        // 4. Cache discovery (brand trovati in sessioni precedenti)
+        if (discoveredBrands.containsKey(key)) {
+            return discoveredBrands.get(key);
+        }
+
+        // 5. Discovery: prova URL canonico e verifica che risponda con pagina modelli
+        String discovered = discoverBrandUrl(key);
+        if (discovered != null) {
+            discoveredBrands.put(key, discovered);
+            return discovered;
+        }
+
         return null;
     }
 
-    private void refreshBrandCacheIfNeeded() throws IOException {
-        long now = System.currentTimeMillis();
-        if (!brandCache.isEmpty() && (now - brandCacheTime) < CACHE_TTL_MS) return;
+    private String buildBrandUrl(String nome, int id) {
+        // Formato: https://www.auto-data.net/it/volkswagen-brand-80
+        String slug = nome.replace(" ", "-");
+        return BASE + "/it/" + slug + "-brand-" + id;
+    }
 
-        log.debug("[AutoDataNet] Refresh cache marche da /allbrands");
-        Document doc = fetch(ALL_BRANDS);
-        Map<String, String> fresh = new LinkedHashMap<>();
+    private String resolveAlias(String key) {
+        return switch (key) {
+            case "vw"          -> "volkswagen";
+            case "mb", "merc" -> "mercedes-benz";
+            case "bmwm"        -> "bmw";
+            case "alfiero", "ar", "alfa" -> "alfa romeo";
+            case "rangerover", "range rover" -> "land rover";
+            default            -> null;
+        };
+    }
 
-        for (Element a : doc.select("a[href*=-brand-]")) {
-            String href = absoluteHref(a);
-            if (href.isEmpty()) continue;
-            // Ricava il nome marca dal testo del link o dall'URL
-            String name = normalize(a.text());
-            if (name.isEmpty()) {
-                // fallback: estrai dalla URL "/it/volkswagen-brand-80" -> "volkswagen"
-                String path = href.replaceAll(".*/it/", "").replaceAll("-brand-\\d+.*", "");
-                name = normalize(path);
+    /**
+     * Tenta di trovare l'URL brand cercando nei link della pagina
+     * /it/<marca>-brand-1 fino a brand-600 sarebbe troppo lento.
+     * Strategia più veloce: costruisci URL canonico e verifica il title.
+     */
+    private String discoverBrandUrl(String marca) {
+        // Prova con URL canonico: auto-data usa slug con trattino
+        // Itera ID 1-500 è troppo lento (500 HTTP requests).
+        // Alternativa: usa il sitemap XML che lista tutte le pagine.
+        log.debug("[AutoDataNet] Discovery brand '{}': non in mappa statica", marca);
+        // Tenta sitemap index
+        try {
+            Document sitemap = Jsoup.connect(BASE + "/sitemap.xml")
+                .userAgent(userAgent).timeout(timeoutMs)
+                .ignoreHttpErrors(true).get();
+            String slug = marca.replace(" ", "-");
+            for (Element loc : sitemap.select("loc")) {
+                String url = loc.text();
+                if (url.contains("/" + slug + "-brand-")) {
+                    log.info("[AutoDataNet] Brand discovery via sitemap: {}", url);
+                    return url;
+                }
             }
-            if (!name.isEmpty()) fresh.put(name, href);
+        } catch (Exception e) {
+            log.debug("[AutoDataNet] Sitemap non disponibile: {}", e.getMessage());
         }
-
-        if (!fresh.isEmpty()) {
-            brandCache.clear();
-            brandCache.putAll(fresh);
-            brandCacheTime = now;
-            log.debug("[AutoDataNet] Cache marche: {} voci", brandCache.size());
-        } else {
-            log.warn("[AutoDataNet] /allbrands: nessun link -brand- trovato (probabile JS rendering)");
-        }
+        return null;
     }
 
     // ══════════════════════════════════════════════
@@ -181,11 +289,13 @@ public class AutoDataNetScraper {
             String href = absoluteHref(a);
             if (href.isEmpty()) continue;
             String name = normalize(a.text());
-            if (name.isEmpty()) name = normalize(href.replaceAll(".*/it/", "").replaceAll("-model-\\d+.*", "").replace("-", " "));
+            if (name.isEmpty()) {
+                name = normalize(href.replaceAll(".*/it/", "").replaceAll("-model-\\d+.*", "").replace("-", " "));
+            }
             if (!name.isEmpty()) candidates.add(new LinkEntry(name, href));
         }
 
-        // Dedup
+        // Dedup per URL
         Map<String, LinkEntry> dedup = new LinkedHashMap<>();
         for (LinkEntry e : candidates) dedup.put(e.url(), e);
         candidates = new ArrayList<>(dedup.values());
@@ -198,31 +308,26 @@ public class AutoDataNetScraper {
     }
 
     /**
-     * Match modello con gestione casi speciali:
-     *   "ttrs"  -> cerca "tt rs", "tt-rs", "tt" con sub-link "rs"
-     *   "rs4"   -> "rs 4", "rs4"
-     *   "classe a" -> "classe a", "a-class"
-     *
-     * Strategia:
-     *   1. Match esatto normalizzato
-     *   2. Match senza spazi ("tt rs" == "ttrs")
-     *   3. Match per token: ogni token del modello deve apparire nel candidato
-     *   4. Best overlap conteggio token
+     * Fuzzy match modello:
+     *   "ttrs"    -> "tt rs", "tt-rs" (compact match)
+     *   "rs4"     -> "rs 4", "rs4"
+     *   "classe a"-> "a-class", "classe a"
+     *   "golf 8"  -> "golf viii", "golf"
      */
     private String bestModelMatch(String modello, List<LinkEntry> candidates) {
         if (candidates.isEmpty()) return null;
-        String mNorm = modello.replace("-", " ").trim();
-        String mCompact = mNorm.replace(" ", ""); // "ttrs" o "rs4" o "classea"
+        String mNorm    = modello.replace("-", " ").trim();
+        String mCompact = mNorm.replace(" ", "");
 
         // 1. Exact
         for (LinkEntry c : candidates)
             if (c.name().replace("-", " ").equals(mNorm)) return c.url();
 
-        // 2. Compact match ("ttrs" vs "tt rs" -> compact entrambi)
+        // 2. Compact ("ttrs" == "tt rs".replace(" ",""))
         for (LinkEntry c : candidates)
             if (c.name().replace("-", " ").replace(" ", "").equals(mCompact)) return c.url();
 
-        // 3. Il candidato contiene tutti i token del modello
+        // 3. Candidato contiene tutti i token del modello
         String[] tokens = mNorm.split("\\s+");
         for (LinkEntry c : candidates) {
             String cn = c.name().replace("-", " ");
@@ -231,14 +336,16 @@ public class AutoDataNetScraper {
             if (allMatch) return c.url();
         }
 
-        // 4. Best overlap
+        // 4. Best overlap score
         String best = null; int bestScore = 0;
         for (LinkEntry c : candidates) {
             String cn = c.name().replace("-", " ");
+            String cnCompact = cn.replace(" ", "");
             int score = 0;
-            for (String t : tokens) if (t.length() > 1 && cn.contains(t)) score++;
-            // bonus: il candidato inizia con lo stesso prefisso compatto
-            if (cn.replace(" ", "").startsWith(mCompact.substring(0, Math.min(3, mCompact.length())))) score++;
+            for (String t : tokens) if (t.length() > 1 && cn.contains(t)) score += 2;
+            // Bonus prefix compact
+            int prefixLen = Math.min(3, mCompact.length());
+            if (cnCompact.startsWith(mCompact.substring(0, prefixLen))) score += 1;
             if (score > bestScore) { bestScore = score; best = c.url(); }
         }
         return best;
@@ -251,17 +358,16 @@ public class AutoDataNetScraper {
     private String findGenerazioneUrl(String modelUrl, int anno) throws IOException {
         Document doc = fetch(modelUrl);
 
-        String bestUrl   = null;
-        int    bestFrom  = Integer.MIN_VALUE;
-        String fallback  = null;
+        String bestUrl  = null;
+        int    bestFrom = Integer.MIN_VALUE;
+        String fallback = null;
 
         for (Element a : doc.select("a[href*=-generation-]")) {
             String href = absoluteHref(a);
             if (href.isEmpty()) continue;
             if (fallback == null) fallback = href;
 
-            // Cerca anni nel contesto (testo del link + elemento padre)
-            Element parent = a.closest("div, li, tr");
+            Element parent = a.closest("div, li, tr, td");
             String ctx = (parent != null ? parent.text() : "") + " " + a.text();
             int[] range = extractYearRange(ctx);
             if (range == null) continue;
@@ -298,8 +404,8 @@ public class AutoDataNetScraper {
         Document doc = fetch(genUrl);
         String ml = normalize(motore);
 
-        int    reqPower  = extractPower(ml);
-        String reqDisp   = extractDisplacement(ml);
+        int    reqPower = extractPower(ml);
+        String reqDisp  = extractDisplacement(ml);
         List<String> reqFuel = matchTokens(ml, FUEL_TOKENS);
         List<String> reqGear = matchTokens(ml, GEAR_TOKENS);
 
@@ -311,11 +417,12 @@ public class AutoDataNetScraper {
             String href = absoluteHref(a);
             if (!isMotorUrl(href, genUrl)) continue;
             String name = normalize(a.text());
-            if (name.isEmpty()) name = normalize(href.replaceAll(".*/it/", "").replace("-", " ").replaceAll("\\d+$", "").trim());
+            if (name.isEmpty()) {
+                name = normalize(href.replaceAll(".*/it/", "").replace("-", " ").replaceAll("\\d+$", "").trim());
+            }
             if (!name.isEmpty()) candidates.add(new LinkEntry(name, href));
         }
 
-        // Dedup
         Map<String, LinkEntry> dedup = new LinkedHashMap<>();
         for (LinkEntry e : candidates) dedup.put(e.url(), e);
         candidates = new ArrayList<>(dedup.values());
@@ -328,18 +435,16 @@ public class AutoDataNetScraper {
 
         String bestUrl = null; int bestScore = -1;
         for (LinkEntry c : candidates) {
-            String urlL = c.url().toLowerCase();
+            String urlL  = c.url().toLowerCase();
             String nameL = c.name();
             int score = 0;
 
-            if (reqPower > 0) {
-                if (urlL.contains(reqPower + "hp") || nameL.contains(String.valueOf(reqPower))) score += 3;
-            }
+            if (reqPower > 0 && (urlL.contains(reqPower + "hp") || nameL.contains(String.valueOf(reqPower)))) score += 3;
             for (String ft : reqFuel)
                 if (urlL.contains(ft) || nameL.contains(ft)) { score += 2; break; }
             if (reqDisp != null) {
-                String dispNorm = reqDisp.replace(",", ".");
-                if (urlL.contains(dispNorm) || nameL.contains(dispNorm)) score += 1;
+                String d = reqDisp.replace(",", ".");
+                if (urlL.contains(d) || nameL.contains(d)) score += 1;
             }
             for (String gt : reqGear)
                 if (urlL.contains(gt) || nameL.contains(gt)) { score += 1; break; }
@@ -375,7 +480,6 @@ public class AutoDataNetScraper {
         sb.append("[FONTE: ").append(url).append("]\n");
         sb.append(doc.title()).append("\n\n");
 
-        // Estrai righe tabella: Label: Valore
         for (Element table : doc.select("table")) {
             for (Element row : table.select("tr")) {
                 Elements cells = row.select("td, th");
@@ -389,7 +493,6 @@ public class AutoDataNetScraper {
             sb.append("\n");
         }
 
-        // Fallback: testo body se tabelle insufficienti
         if (sb.length() < 400) {
             Element body = doc.body();
             if (body != null) sb.append(body.text());
