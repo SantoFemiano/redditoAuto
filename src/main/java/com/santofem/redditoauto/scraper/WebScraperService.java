@@ -20,26 +20,21 @@ import java.util.Set;
  *
  * STRATEGIA:
  * Interroga le fonti in ordine di priorita'. Alla prima risposta che supera
- * la soglia minima di testo tecnico, si ferma.
+ * la soglia di testo tecnico, si ferma.
  * Se tutte le fonti falliscono, restituisce Optional.empty().
  *
  * FONTI (in ordine di qualita' per schede tecniche):
- * 1. automoto.it     — schede tecniche italiane, HTML statico, ben strutturato
+ * 1. automoto.it     — schede tecniche italiane, HTML statico
  * 2. auto.it         — dati tecnici italiani, HTML statico
- * 3. motorbox.com    — schede italiane, statico, buona copertura
+ * 3. motorbox.com    — schede italiane, statico
  * 4. dati.guru       — aggregatore schede tecniche, statico
- * 5. bing.com search — fallback ricerca testuale (Bing < bot-protection di Google)
- *
- * SITI ESCLUSI:
- * - motorionline.com  : rendering JS, restituisce ~93 chars di HTML statico
- * - schedatecnica.it  : certificato SSL scaduto / SAN mismatch
- * - google.com/search : aggressivo anti-bot, restituisce ~86 chars
- * - autoscout24.it    : listing annunci, non schede tecniche
- * - mobile.de         : listing annunci in tedesco, ToS scraping vietato
+ * 5. bing.com search — fallback ricerca testuale
  *
  * FILTRO isTestoTecnico():
- * Prima di restituire il testo, verifica che contenga almeno 2 keyword tecniche.
- * Difende dall'invio di listing/homepage/pagine di errore all'AI extractor.
+ * Verifica che il testo contenga almeno 4 keyword tecniche tra cui
+ * almeno una numerica/specifica (l/100, cc, nm, rpm, euro 6).
+ * Difende da pagine di listing/navigazione che hanno solo 2-3 parole
+ * generiche come 'motore' e 'diesel' nel menu.
  */
 @Service
 @Slf4j
@@ -57,11 +52,23 @@ public class WebScraperService implements WebScraper {
     @Value("${scraper.min-text-length:200}")
     private int minTextLength;
 
-    /** Keyword tecniche: almeno 2 devono essere presenti per considerare il testo valido. */
-    private static final Set<String> KEYWORD_TECNICHE = Set.of(
+    /**
+     * Keyword generiche: presenti anche in listing/homepage.
+     * Usate solo per il conteggio totale (soglia = 4).
+     */
+    private static final Set<String> KEYWORD_GENERICHE = Set.of(
         "consumo", "kw", "cv", "cilindrata", "carburante", "diesel", "benzina",
         "potenza", "coppia", "cambio", "tagliando", "pneumatici", "emissioni",
         "autonomia", "wltp", "nedc", "cavalli", "motore", "cilindri"
+    );
+
+    /**
+     * Keyword numeriche/specifiche: presenti SOLO in schede tecniche reali.
+     * Se almeno 1 e' presente, il testo e' quasi certamente una scheda tecnica.
+     */
+    private static final Set<String> KEYWORD_NUMERICHE = Set.of(
+        "l/100", "l/100km", "cc", " nm", "rpm", "euro 6", "euro6",
+        "kw/", "cv/", "g/km", "co2", "kwh", "mpi", "tdi", "tsi", "gdi"
     );
 
     // -----------------------------------------------
@@ -73,26 +80,11 @@ public class WebScraperService implements WebScraper {
         log.info("[Scraper] Avvio ricerca per: {} {} {} {}", marca, modello, motore, anno);
 
         List<ScraperSource> sources = List.of(
-            new ScraperSource(
-                "automoto.it",
-                buildAutoMotoUrl(marca, modello, anno)
-            ),
-            new ScraperSource(
-                "auto.it",
-                buildAutoItUrl(marca, modello, anno)
-            ),
-            new ScraperSource(
-                "motorbox.com",
-                buildMotorboxUrl(marca, modello, anno)
-            ),
-            new ScraperSource(
-                "dati.guru",
-                buildDatiGuruUrl(marca, modello, anno)
-            ),
-            new ScraperSource(
-                "Bing",
-                buildBingSearchUrl(marca, modello, motore, anno)
-            )
+            new ScraperSource("automoto.it",  buildAutoMotoUrl(marca, modello, anno)),
+            new ScraperSource("auto.it",       buildAutoItUrl(marca, modello, anno)),
+            new ScraperSource("motorbox.com",  buildMotorboxUrl(marca, modello, anno)),
+            new ScraperSource("dati.guru",     buildDatiGuruUrl(marca, modello, anno)),
+            new ScraperSource("Bing",          buildBingSearchUrl(marca, modello, motore, anno))
         );
 
         for (ScraperSource source : sources) {
@@ -128,6 +120,12 @@ public class WebScraperService implements WebScraper {
 
             String text = extractRelevantText(doc, source.url());
 
+            // Log snippet per diagnostica
+            if (log.isDebugEnabled() && !text.isBlank()) {
+                String snippet = text.length() > 200 ? text.substring(0, 200) : text;
+                log.debug("[Scraper] Snippet da '{}': [{}]", source.name(), snippet);
+            }
+
             if (text.length() < minTextLength) {
                 log.debug("[Scraper] Testo troppo corto da '{}': {} chars",
                     source.name(), text.length());
@@ -135,8 +133,8 @@ public class WebScraperService implements WebScraper {
             }
 
             if (!isTestoTecnico(text)) {
-                log.warn("[Scraper] Testo da '{}' scartato: mancano keyword tecniche (probabile listing/homepage).",
-                    source.name());
+                log.warn("[Scraper] Testo da '{}' scartato: non e' una scheda tecnica ({} chars, no keyword sufficienti).",
+                    source.name(), text.length());
                 return Optional.empty();
             }
 
@@ -153,13 +151,26 @@ public class WebScraperService implements WebScraper {
     // VALIDATORE QUALITA' TESTO
     // -----------------------------------------------
 
+    /**
+     * Un testo e' considerato una scheda tecnica valida se:
+     * - Contiene almeno 4 keyword generiche (consumi, kw, diesel...)
+     * - OPPURE contiene almeno 1 keyword numerica/specifica (l/100, cc, nm...)
+     *   che e' quasi impossibile trovare in pagine di listing o navigazione.
+     *
+     * Questo previene che pagine di listing con solo 'motore'+'diesel'
+     * nel menu vengano passate all'AI come se fossero schede tecniche.
+     */
     boolean isTestoTecnico(String testo) {
         if (testo == null || testo.isBlank()) return false;
         String lower = testo.toLowerCase();
-        long count = KEYWORD_TECNICHE.stream()
-            .filter(lower::contains)
-            .count();
-        return count >= 2;
+
+        // Criterio 1: almeno 1 keyword numerica specifica
+        boolean haKeywordNumerica = KEYWORD_NUMERICHE.stream().anyMatch(lower::contains);
+        if (haKeywordNumerica) return true;
+
+        // Criterio 2: almeno 4 keyword generiche (soglia alzata da 2 a 4)
+        long countGeneriche = KEYWORD_GENERICHE.stream().filter(lower::contains).count();
+        return countGeneriche >= 4;
     }
 
     // -----------------------------------------------
@@ -167,35 +178,17 @@ public class WebScraperService implements WebScraper {
     // -----------------------------------------------
 
     private String extractRelevantText(Document doc, String sourceUrl) {
-        // Rimuove elementi non utili
         doc.select("nav, header, footer, script, style, iframe, noscript, " +
                    ".cookie-banner, .ads, .advertisement, #cookie, " +
                    ".social-share, .newsletter, .related-articles, " +
                    ".sidebar, .menu, .breadcrumb, .pagination").remove();
 
-        // Selettori specifici per schede tecniche, in ordine di specificita'
         String[] technicalSelectors = {
-            // Selettori generici schede tecniche
-            ".scheda-tecnica",
-            ".technical-specs",
-            ".specs-table",
-            ".specs-container",
-            ".car-specs",
-            ".dati-tecnici",
-            "#specifiche-tecniche",
-            "#dati-tecnici",
-            "[data-specs]",
-            // Selettori per automoto.it
-            ".scheda",
-            ".tecnica",
-            ".caratteristiche",
-            // Tabelle con dati
-            "table",
-            // Contenuto principale
-            "article",
-            "main",
-            ".content",
-            "#content"
+            ".scheda-tecnica", ".technical-specs", ".specs-table",
+            ".specs-container", ".car-specs", ".dati-tecnici",
+            "#specifiche-tecniche", "#dati-tecnici", "[data-specs]",
+            ".scheda", ".tecnica", ".caratteristiche",
+            "table", "article", "main", ".content", "#content"
         };
 
         for (String selector : technicalSelectors) {
@@ -216,53 +209,26 @@ public class WebScraperService implements WebScraper {
     // URL BUILDERS
     // -----------------------------------------------
 
-    /**
-     * automoto.it — formato: /schede-tecniche/marca/modello/anno/
-     * Esempio: https://www.automoto.it/schede-tecniche/volkswagen/golf/2022/
-     */
     private String buildAutoMotoUrl(String marca, String modello, int anno) {
         return "https://www.automoto.it/schede-tecniche/"
-            + slugify(marca) + "/"
-            + slugify(modello) + "/"
-            + anno + "/";
+            + slugify(marca) + "/" + slugify(modello) + "/" + anno + "/";
     }
 
-    /**
-     * auto.it — formato: /schede-tecniche/marca-modello-anno.html
-     * Esempio: https://www.auto.it/schede_tecniche/volkswagen/golf/2022/
-     */
     private String buildAutoItUrl(String marca, String modello, int anno) {
         return "https://www.auto.it/schede_tecniche/"
-            + slugify(marca) + "/"
-            + slugify(modello) + "/"
-            + anno + "/";
+            + slugify(marca) + "/" + slugify(modello) + "/" + anno + "/";
     }
 
-    /**
-     * motorbox.com — formato: /schede-tecniche/marca/modello-anno/
-     * Esempio: https://www.motorbox.com/auto/scheda-tecnica/volkswagen/golf-2022/
-     */
     private String buildMotorboxUrl(String marca, String modello, int anno) {
         return "https://www.motorbox.com/auto/scheda-tecnica/"
-            + slugify(marca) + "/"
-            + slugify(modello) + "-" + anno + "/";
+            + slugify(marca) + "/" + slugify(modello) + "-" + anno + "/";
     }
 
-    /**
-     * dati.guru — aggregatore internazionale di specifiche tecniche, HTML statico.
-     * Esempio: https://www.dati.guru/it/volkswagen/golf/2022/
-     */
     private String buildDatiGuruUrl(String marca, String modello, int anno) {
         return "https://www.dati.guru/it/"
-            + slugify(marca) + "/"
-            + slugify(modello) + "/"
-            + anno + "/";
+            + slugify(marca) + "/" + slugify(modello) + "/" + anno + "/";
     }
 
-    /**
-     * Bing Search — meno aggressivo di Google anti-bot.
-     * Cerca specificatamente schede tecniche italiane.
-     */
     private String buildBingSearchUrl(String marca, String modello, String motore, int anno) {
         String q = encode("scheda tecnica " + marca + " " + modello + " "
             + motore + " " + anno + " consumi kw cilindrata tagliando site:it");
@@ -274,8 +240,7 @@ public class WebScraperService implements WebScraper {
     // -----------------------------------------------
 
     private String slugify(String input) {
-        return input.toLowerCase()
-                    .trim()
+        return input.toLowerCase().trim()
                     .replaceAll("[^a-z0-9]+", "-")
                     .replaceAll("^-|-$", "");
     }
@@ -287,10 +252,6 @@ public class WebScraperService implements WebScraper {
     private String truncate(String text, int maxLen) {
         return text.length() <= maxLen ? text : text.substring(0, maxLen) + "...[TRONCATO]";
     }
-
-    // -----------------------------------------------
-    // INNER RECORD
-    // -----------------------------------------------
 
     public record ScraperSource(String name, String url) {}
 }
