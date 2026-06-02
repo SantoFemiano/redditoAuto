@@ -1,6 +1,7 @@
 package com.santofem.redditoauto.config;
 
 import com.santofem.redditoauto.ai.AiCarDataExtractor;
+import com.santofem.redditoauto.ai.AiDirectDataProvider;
 import dev.langchain4j.model.chat.request.ResponseFormat;
 import dev.langchain4j.model.googleai.GoogleAiGeminiChatModel;
 import dev.langchain4j.service.AiServices;
@@ -20,7 +21,7 @@ import org.springframework.context.annotation.Profile;
  *   e per non fallire l'avvio con la fake key 'test-fake-key'.
  *   I test unitari del service usano @Mock su AiCarDataExtractor direttamente.
  *
- * MODELLO SCELTO: gemini-2.0-flash
+ * MODELLO SCELTO: gemini-2.5-flash
  * - Veloce, economico, ottimo per structured output / extraction tasks.
  * - temperature=0.0: risposta deterministica, zero creativita'.
  *   Fondamentale per un extractor: vogliamo mapping, non generazione.
@@ -30,7 +31,12 @@ import org.springframework.context.annotation.Profile;
  *   sempre in JSON valido, prevenendo risposte in testo libero.
  * - LangChain4j invia automaticamente il JSON Schema di CarDataDTO a Gemini
  *   tramite il parametro 'responseSchema' dell'API.
- * - Gemini e' istruito a rispettare lo schema e restituire JSON valido.
+ *
+ * AI SERVICES REGISTRATI:
+ * - AiCarDataExtractor: estrae dati tecnici DA un testo grezzo (scraping)
+ * - AiDirectDataProvider: genera dati tecnici DIRETTAMENTE dal training set
+ *   di Gemini, usato come fallback quando lo scraping fallisce.
+ *   Entrambi usano lo stesso ChatModel (stessa chiave, stesso modello).
  */
 @Configuration
 @Profile("!test")
@@ -49,8 +55,6 @@ public class LangChain4jConfig {
     @Bean
     @ConditionalOnProperty(name = "gemini.api.key", havingValue = "changeme", matchIfMissing = false)
     public GoogleAiGeminiChatModel geminiChatModelStub() {
-        // Bean stub se la chiave non e' stata configurata — lancia eccezione al runtime
-        // ma non blocca il boot. Rimuovere in produzione.
         throw new IllegalStateException(
             "[RedditoAuto] GEMINI_API_KEY non configurata! " +
             "Esporta la variabile d'ambiente: export GEMINI_API_KEY=la_tua_chiave");
@@ -71,6 +75,13 @@ public class LangChain4jConfig {
     @Bean
     public AiCarDataExtractor aiCarDataExtractor(GoogleAiGeminiChatModel chatModel) {
         return AiServices.builder(AiCarDataExtractor.class)
+                .chatLanguageModel(chatModel)
+                .build();
+    }
+
+    @Bean
+    public AiDirectDataProvider aiDirectDataProvider(GoogleAiGeminiChatModel chatModel) {
+        return AiServices.builder(AiDirectDataProvider.class)
                 .chatLanguageModel(chatModel)
                 .build();
     }
