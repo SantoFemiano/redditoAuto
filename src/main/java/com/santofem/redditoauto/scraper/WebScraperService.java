@@ -106,6 +106,16 @@ public class WebScraperService implements WebScraper {
         return Optional.empty();
     }
 
+    /**
+     * Scarica e parsa un URL diretto.
+     * Usato dall'endpoint /estrai-url dove l'utente fornisce un link specifico.
+     */
+    @Override
+    public Optional<String> scrapeUrl(String url) {
+        log.info("[Scraper] Scraping URL diretto: {}", url);
+        return fetchAndParse(new ScraperSource("url-diretto", url));
+    }
+
     // -----------------------------------------------
     // FETCH + PARSE GENERICO
     // -----------------------------------------------
