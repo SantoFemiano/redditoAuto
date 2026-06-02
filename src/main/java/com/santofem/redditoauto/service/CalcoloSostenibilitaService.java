@@ -1,8 +1,13 @@
 package com.santofem.redditoauto.service;
 
-import com.santofem.redditoauto.dto.RisultatoCalcoloDTO;
 import com.santofem.redditoauto.entity.Motorizzazione;
 import com.santofem.redditoauto.entity.enums.TipoCarburante;
+import com.santofem.redditoauto.exception.ResourceNotFoundException;
+import com.santofem.redditoauto.repository.MotorizzazioneRepository;
+import com.santofem.redditoauto.service.dto.CalcoloRequestDTO;
+import com.santofem.redditoauto.service.dto.CalcoloRispostaDTO;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -14,191 +19,193 @@ import java.math.RoundingMode;
  *
  * Formula rata francese (ammortamento a rate costanti):
  *   R = P * [ i(1+i)^n ] / [ (1+i)^n - 1 ]
- *   dove:
- *     P = capitale finanziato
- *     i = tasso mensile (TAN annuo / 12)
- *     n = numero rate mensili
+ *   dove P = capitale finanziato, i = TAN/12, n = numero rate
  *
- * Bollo ACI (Italia 2024):
- *   - Benzina/GPL/Metano/Ibrido: 2.58 €/kW per i primi 100 kW,
- *                                 3.87 €/kW per i kW eccedenti i 100
- *   - Diesel: 2.58 €/kW fino a 100kW + 3.87 €/kW oltre, con maggiorazione 0.26/0.39 €/kW
- *   - Elettrici puri: esenti per i primi 5 anni, poi 50% riduzione
- *   - Minimo bollo: 27.00 €
+ * Bollo ACI Italia 2024:
+ *   Benzina/Ibrido:  2.58 €/kW fino a 100 kW + 3.87 €/kW oltre
+ *   Diesel:          +0.26/0.39 €/kW di maggiorazione
+ *   Elettrico puro:  esente (0 €)
+ *   Minimo bollo:    27.00 €/anno
  *
- * Costi mensili inclusi:
- *   1. Rata finanziamento
- *   2. Carburante (consumo × km/mese × prezzo carburante)
- *   3. Pneumatici (costo set / durata mesi stimata)
- *   4. Tagliandi (costo annuo medio / 12)
- *   5. Bollo (annuale / 12)
- *   6. Assicurazione RC (stimata per gruppo assicurativo)
+ * Giudizio di sostenibilità (% reddito assorbita dall'auto):
+ *   OTTIMO      → ≤ 20%
+ *   ACCETTABILE → ≤ 30%
+ *   ATTENZIONE  → ≤ 40%
+ *   CRITICO     → > 40%
  */
 @Service
+@RequiredArgsConstructor
+@Slf4j
 public class CalcoloSostenibilitaService {
 
-    // --- Costanti bollo ACI ---
-    private static final BigDecimal BOLLO_BASE_PER_KW        = new BigDecimal("2.58");
-    private static final BigDecimal BOLLO_EXTRA_PER_KW       = new BigDecimal("3.87");
-    private static final BigDecimal BOLLO_DIESEL_BASE        = new BigDecimal("0.26");
-    private static final BigDecimal BOLLO_DIESEL_EXTRA       = new BigDecimal("0.39");
-    private static final int        BOLLO_SOGLIA_KW          = 100;
-    private static final BigDecimal BOLLO_MINIMO             = new BigDecimal("27.00");
+    private final MotorizzazioneRepository motorizzazioneRepository;
 
-    // --- Costi pneumatici stimati (€ per set di 4) ---
-    private static final BigDecimal COSTO_PNEUMATICI_STANDARD = new BigDecimal("400.00");
-    private static final BigDecimal COSTO_PNEUMATICI_RUNFLAT  = new BigDecimal("700.00");
-    private static final int        DURATA_PNEUMATICI_MESI    = 36; // ~3 anni / 45.000 km
+    // ── Bollo ACI ────────────────────────────────────────────────
+    private static final BigDecimal BOLLO_BASE_KW       = new BigDecimal("2.58");
+    private static final BigDecimal BOLLO_EXTRA_KW      = new BigDecimal("3.87");
+    private static final BigDecimal BOLLO_DIESEL_BASE   = new BigDecimal("0.26");
+    private static final BigDecimal BOLLO_DIESEL_EXTRA  = new BigDecimal("0.39");
+    private static final int        BOLLO_SOGLIA_KW     = 100;
+    private static final BigDecimal BOLLO_MINIMO        = new BigDecimal("27.00");
 
-    // --- Prezzi carburante di riferimento (€/litro o €/kWh) ---
-    private static final BigDecimal PREZZO_BENZINA   = new BigDecimal("1.75");
-    private static final BigDecimal PREZZO_DIESEL    = new BigDecimal("1.65");
-    private static final BigDecimal PREZZO_GPL       = new BigDecimal("0.75");
-    private static final BigDecimal PREZZO_METANO    = new BigDecimal("1.20");  // €/kg
-    private static final BigDecimal PREZZO_ELETTRICO = new BigDecimal("0.25");  // €/kWh
+    // ── Pneumatici ───────────────────────────────────────────────
+    private static final BigDecimal PNEUMATICI_STANDARD = new BigDecimal("400.00");
+    private static final BigDecimal PNEUMATICI_RUNFLAT  = new BigDecimal("700.00");
+    private static final int        PNEUMATICI_MESI     = 36;
 
-    // --- Parametri default ---
-    private static final int        KM_MENSILI_DEFAULT    = 1500;
-    private static final BigDecimal CONSUMO_EV_KWH_100KM  = new BigDecimal("16.00"); // kWh/100km medio EV
+    // ── Fallback consumi/costi ────────────────────────────────────
+    private static final BigDecimal CONSUMO_FALLBACK       = new BigDecimal("8.00");  // l/100km
+    private static final BigDecimal CONSUMO_EV_KWH_100KM   = new BigDecimal("16.00"); // kWh/100km
+    private static final BigDecimal TAGLIANDO_BASE_FB      = new BigDecimal("250.00");
+    private static final BigDecimal TAGLIANDO_MAIOR_FB     = new BigDecimal("600.00");
+    private static final int        INTERVALLO_BASE_FB     = 15_000;
+    private static final int        INTERVALLO_MAIOR_FB    = 60_000;
 
-    /**
-     * Punto di ingresso principale del calcolo.
-     *
-     * @param motorizzazione  entità con tutti i dati tecnici dell'auto
-     * @param prezzoAuto      prezzo totale dell'auto (può differire dal listino per sconti)
-     * @param anticipo        acconto versato (riduce il capitale finanziato)
-     * @param tanAnnuo        Tasso Annuo Nominale del finanziamento (es. 0.0699 = 6.99%)
-     * @param durataRateMesi  numero di rate mensili (es. 48, 60, 72, 84)
-     * @param redditoNetto    reddito netto mensile del richiedente
-     * @param kmMensili       chilometri percorsi al mese (0 = usa default 1500)
-     * @return DTO con il dettaglio completo dei costi e il giudizio di sostenibilità
-     */
-    public RisultatoCalcoloDTO calcola(
-            Motorizzazione motorizzazione,
-            BigDecimal prezzoAuto,
-            BigDecimal anticipo,
-            BigDecimal tanAnnuo,
-            int durataRateMesi,
-            BigDecimal redditoNetto,
-            int kmMensili
-    ) {
-        int km = kmMensili > 0 ? kmMensili : KM_MENSILI_DEFAULT;
+    // ── Soglie sostenibilità ──────────────────────────────────────
+    private static final BigDecimal SOGLIA_OTTIMO      = new BigDecimal("20.00");
+    private static final BigDecimal SOGLIA_ACCETTABILE = new BigDecimal("30.00");
+    private static final BigDecimal SOGLIA_ATTENZIONE  = new BigDecimal("40.00");
 
-        BigDecimal rata             = calcolaRataFrancese(prezzoAuto, anticipo, tanAnnuo, durataRateMesi);
-        BigDecimal costoCarburante  = calcolaCostoCarburanteMensile(motorizzazione, km);
-        BigDecimal costoPneumatici  = calcolaCostoPneumaticiMensile(motorizzazione);
-        BigDecimal costoTagliandi   = calcolaCostoTagliandiMensile(motorizzazione, km);
-        BigDecimal bolloMensile     = calcolaBolloMensile(motorizzazione);
-        BigDecimal assicurazioneMensile = stimaAssicurazioneMensile(motorizzazione);
+    // =============================================================
+    // ENTRY POINT PUBBLICO
+    // =============================================================
 
-        BigDecimal totaleMensile = rata
-                .add(costoCarburante)
-                .add(costoPneumatici)
-                .add(costoTagliandi)
+    public CalcoloRispostaDTO calcola(CalcoloRequestDTO request) {
+
+        Motorizzazione m = motorizzazioneRepository.findById(request.getMotorizzazioneId())
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "Motorizzazione non trovata con id: " + request.getMotorizzazioneId()));
+
+        // TAN da percentuale a decimale (es. 7.5 → 0.075)
+        BigDecimal tanDecimale = request.getTanPercentuale()
+                .divide(BigDecimal.valueOf(100), 10, RoundingMode.HALF_UP);
+
+        BigDecimal prezzoAuto    = m.getPrezzoListinoEur() != null
+                ? m.getPrezzoListinoEur()
+                : BigDecimal.ZERO;
+        BigDecimal anticipo      = request.getAcconto();
+        BigDecimal prezzoFinanz  = prezzoAuto.subtract(anticipo).max(BigDecimal.ZERO);
+        int        durata        = request.getDurataFinanziamentoMesi();
+        int        kmMensili     = request.getKmMensiliStimati();
+        BigDecimal prezzoCarb    = request.getPrezzoCombustibileLitro();
+
+        // ── Calcoli singoli ───────────────────────────────────────
+        BigDecimal rata                 = calcolaRataFrancese(prezzoFinanz, tanDecimale, durata);
+        BigDecimal interessiTotali      = rata.multiply(BigDecimal.valueOf(durata)).subtract(prezzoFinanz).max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP);
+        BigDecimal costoTotaleFinanz    = rata.multiply(BigDecimal.valueOf(durata)).setScale(2, RoundingMode.HALF_UP);
+        BigDecimal costoCarb            = calcolaCostoCarburanteMensile(m, kmMensili, prezzoCarb);
+        BigDecimal costoPneumMensile    = calcolaCostoPneumaticiMensile(m);
+        BigDecimal[] tagliandi          = calcolaCostoTagliandiMensile(m, kmMensili); // [0]=base, [1]=maior
+        BigDecimal bolloMensile         = calcolaBolloMensile(m);
+        BigDecimal assicMensile         = calcolaAssicurazioneMensile(request, m);
+
+        // ── Totali ────────────────────────────────────────────────
+        BigDecimal totCostiVivi = costoCarb
+                .add(costoPneumMensile)
+                .add(tagliandi[0])
+                .add(tagliandi[1])
                 .add(bolloMensile)
-                .add(assicurazioneMensile);
+                .add(assicMensile);
 
-        // Regola standard: auto sostenibile se totale <= 30% del reddito netto
-        BigDecimal percentualeReddito = totaleMensile
-                .divide(redditoNetto, 4, RoundingMode.HALF_UP)
+        BigDecimal totMensile = rata.add(totCostiVivi);
+
+        // ── Sostenibilità ─────────────────────────────────────────
+        BigDecimal reddito = request.getRedditoNettoMensile();
+        BigDecimal percReddito = totMensile
+                .divide(reddito, 6, RoundingMode.HALF_UP)
                 .multiply(BigDecimal.valueOf(100))
                 .setScale(2, RoundingMode.HALF_UP);
 
-        boolean sostenibile = percentualeReddito.compareTo(new BigDecimal("30.00")) <= 0;
+        String giudizio         = calcolaGiudizio(percReddito);
+        String consigli         = generaConsigli(percReddito, m, durata, anticipo);
+        boolean sostenibile     = percReddito.compareTo(SOGLIA_ACCETTABILE) <= 0;
 
-        return RisultatoCalcoloDTO.builder()
-                .rata(rata)
-                .costoCarburanteMensile(costoCarburante)
-                .costoPneumaticiMensile(costoPneumatici)
-                .costoTagliandiMensile(costoTagliandi)
-                .bolloMensile(bolloMensile)
-                .assicurazioneMensile(assicurazioneMensile)
-                .totaleCostoMensile(totaleMensile)
-                .redditoNetto(redditoNetto)
-                .percentualeSuReddito(percentualeReddito)
+        // ── Label auto ───────────────────────────────────────────
+        String label = String.format("%s %s %s (%d)",
+                m.getModello().getMarca().getNome(),
+                m.getModello().getNome(),
+                m.getNomeMotore(),
+                m.getAnnoProduzione());
+
+        log.debug("Calcolo completato: {} → totale={}€/mese ({}%)", label, totMensile, percReddito);
+
+        return CalcoloRispostaDTO.builder()
+                .marcaModelloMotore(label)
+                .prezzoFinanziato(prezzoFinanz)
+                .rataFiananziamentoMensile(rata)
+                .durataFinanziamentoMesi(durata)
+                .tanPercentuale(request.getTanPercentuale())
+                .costoTotaleFinanziamento(costoTotaleFinanz)
+                .interessiTotali(interessiTotali)
+                .costoCarburanteMensile(costoCarb)
+                .costoPneumaticiMensile(costoPneumMensile)
+                .costoTagliandoMensile(tagliandi[0])
+                .costoTagliandoMaiorMensile(tagliandi[1])
+                .costoBolloMensile(bolloMensile)
+                .costoAssicurazioneMensile(assicMensile)
+                .totaleCostiViviMensili(totCostiVivi)
+                .totaleMensileAutoCompleto(totMensile)
+                .redditoNettoMensile(reddito)
+                .percentualeRedditoImpegnata(percReddito)
                 .sostenibile(sostenibile)
-                .kmMensiliUsati(km)
+                .giudizio(giudizio)
+                .messaggioConsigli(consigli)
                 .build();
     }
 
-    // ================================================================
-    // RATA FRANCESE
-    // R = P * [ i(1+i)^n ] / [ (1+i)^n - 1 ]
-    // ================================================================
-    private BigDecimal calcolaRataFrancese(
-            BigDecimal prezzoAuto,
-            BigDecimal anticipo,
-            BigDecimal tanAnnuo,
-            int durataRateMesi
-    ) {
-        BigDecimal capitale = prezzoAuto.subtract(anticipo);
-        if (capitale.compareTo(BigDecimal.ZERO) <= 0) {
-            return BigDecimal.ZERO;
+    // =============================================================
+    // RATA FRANCESE: R = P * i(1+i)^n / ((1+i)^n - 1)
+    // =============================================================
+    private BigDecimal calcolaRataFrancese(BigDecimal capitale, BigDecimal tanDecimale, int n) {
+        if (capitale.compareTo(BigDecimal.ZERO) <= 0) return BigDecimal.ZERO;
+
+        BigDecimal i = tanDecimale.divide(BigDecimal.valueOf(12), 10, RoundingMode.HALF_UP);
+
+        if (i.compareTo(BigDecimal.ZERO) == 0) {
+            return capitale.divide(BigDecimal.valueOf(n), 2, RoundingMode.HALF_UP);
         }
 
-        // tasso mensile = TAN / 12
-        BigDecimal tassoMensile = tanAnnuo.divide(BigDecimal.valueOf(12), 10, RoundingMode.HALF_UP);
-
-        if (tassoMensile.compareTo(BigDecimal.ZERO) == 0) {
-            // tasso zero: rata = capitale / n
-            return capitale.divide(BigDecimal.valueOf(durataRateMesi), 2, RoundingMode.HALF_UP);
-        }
-
-        // (1 + i)^n con MathContext per precisione
         MathContext mc = new MathContext(15, RoundingMode.HALF_UP);
-        BigDecimal unopiui = BigDecimal.ONE.add(tassoMensile);
-        BigDecimal potenza = unopiui.pow(durataRateMesi, mc);
+        BigDecimal unoPiuI = BigDecimal.ONE.add(i);
+        BigDecimal potenza = unoPiuI.pow(n, mc);
 
-        // R = P * i * (1+i)^n / ((1+i)^n - 1)
-        BigDecimal numeratore   = capitale.multiply(tassoMensile).multiply(potenza);
-        BigDecimal denominatore = potenza.subtract(BigDecimal.ONE);
-
-        return numeratore.divide(denominatore, 2, RoundingMode.HALF_UP);
+        return capitale
+                .multiply(i).multiply(potenza)
+                .divide(potenza.subtract(BigDecimal.ONE), 2, RoundingMode.HALF_UP);
     }
 
-    // ================================================================
+    // =============================================================
     // COSTO CARBURANTE MENSILE
-    // ================================================================
-    private BigDecimal calcolaCostoCarburanteMensile(Motorizzazione m, int kmMensili) {
+    // Usa il prezzo fornito dall'utente nel request (prezzoCombustibileLitro)
+    // =============================================================
+    private BigDecimal calcolaCostoCarburanteMensile(
+            Motorizzazione m, int kmMensili, BigDecimal prezzoCarburante) {
+
         TipoCarburante tipo = m.getTipoCarburante();
 
-        // Elettrico puro: kWh/100km × prezzo kWh
         if (tipo == TipoCarburante.ELETTRICO) {
-            BigDecimal consumoKwh = CONSUMO_EV_KWH_100KM;
-            return consumoKwh
+            // kWh/100km × km × €/kWh  (prezzoCarburante è €/kWh per EV)
+            return CONSUMO_EV_KWH_100KM
                     .multiply(BigDecimal.valueOf(kmMensili))
                     .divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP)
-                    .multiply(PREZZO_ELETTRICO)
+                    .multiply(prezzoCarburante)
                     .setScale(2, RoundingMode.HALF_UP);
         }
 
-        // Ibridi plug-in: assume 60% km in elettrico, 40% in termico
         BigDecimal consumo = m.getConsumoMedioLitri100km() != null
-                ? m.getConsumoMedioLitri100km()
-                : new BigDecimal("8.00"); // fallback generico
+                ? m.getConsumoMedioLitri100km() : CONSUMO_FALLBACK;
 
-        BigDecimal kmEffettivi;
-        BigDecimal prezzoCarburante;
-
-        switch (tipo) {
-            case IBRIDO_PLUGIN -> {
-                // 60% elettrico, 40% con consumo dichiarato
-                kmEffettivi = BigDecimal.valueOf(kmMensili).multiply(new BigDecimal("0.40"));
-                prezzoCarburante = PREZZO_BENZINA;
-                BigDecimal costoTermico = consumo
-                        .multiply(kmEffettivi)
-                        .divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP)
-                        .multiply(prezzoCarburante);
-                BigDecimal costoElettrico = CONSUMO_EV_KWH_100KM
-                        .multiply(BigDecimal.valueOf(kmMensili).multiply(new BigDecimal("0.60")))
-                        .divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP)
-                        .multiply(PREZZO_ELETTRICO);
-                return costoTermico.add(costoElettrico).setScale(2, RoundingMode.HALF_UP);
-            }
-            case DIESEL, IBRIDO_DIESEL -> prezzoCarburante = PREZZO_DIESEL;
-            case GPL                   -> prezzoCarburante = PREZZO_GPL;
-            case METANO                -> prezzoCarburante = PREZZO_METANO;
-            default                    -> prezzoCarburante = PREZZO_BENZINA; // BENZINA, IBRIDO_BENZINA, IDROGENO
+        if (tipo == TipoCarburante.IBRIDO_PLUGIN) {
+            // 60% km elettrico + 40% termico
+            BigDecimal kmTermici   = BigDecimal.valueOf(kmMensili).multiply(new BigDecimal("0.40"));
+            BigDecimal kmElettrico = BigDecimal.valueOf(kmMensili).multiply(new BigDecimal("0.60"));
+            BigDecimal costoTerm   = consumo.multiply(kmTermici)
+                    .divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP)
+                    .multiply(prezzoCarburante);
+            BigDecimal costoElett  = CONSUMO_EV_KWH_100KM.multiply(kmElettrico)
+                    .divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP)
+                    .multiply(new BigDecimal("0.25")); // €/kWh fisso per la quota elettrica
+            return costoTerm.add(costoElett).setScale(2, RoundingMode.HALF_UP);
         }
 
         return consumo
@@ -208,99 +215,126 @@ public class CalcoloSostenibilitaService {
                 .setScale(2, RoundingMode.HALF_UP);
     }
 
-    // ================================================================
+    // =============================================================
     // COSTO PNEUMATICI MENSILE
-    // Costo set / durata stimata in mesi
-    // ================================================================
+    // =============================================================
     private BigDecimal calcolaCostoPneumaticiMensile(Motorizzazione m) {
         BigDecimal costoSet = Boolean.TRUE.equals(m.getRunFlat())
-                ? COSTO_PNEUMATICI_RUNFLAT
-                : COSTO_PNEUMATICI_STANDARD;
-        return costoSet.divide(BigDecimal.valueOf(DURATA_PNEUMATICI_MESI), 2, RoundingMode.HALF_UP);
+                ? PNEUMATICI_RUNFLAT : PNEUMATICI_STANDARD;
+        return costoSet.divide(BigDecimal.valueOf(PNEUMATICI_MESI), 2, RoundingMode.HALF_UP);
     }
 
-    // ================================================================
+    // =============================================================
     // COSTO TAGLIANDI MENSILE
-    // Media ponderata tra tagliando base e maior in base agli intervalli
-    // ================================================================
-    private BigDecimal calcolaCostoTagliandiMensile(Motorizzazione m, int kmMensili) {
-        BigDecimal costoBase  = m.getCostoTagliandoBaseEur()  != null ? m.getCostoTagliandoBaseEur()  : new BigDecimal("250.00");
-        BigDecimal costoMaior = m.getCostoTagliandoMaiorEur() != null ? m.getCostoTagliandoMaiorEur() : new BigDecimal("600.00");
-        int kmBase            = m.getIntervalloTagliandoKm()       != null ? m.getIntervalloTagliandoKm()       : 15000;
-        int kmMaior           = m.getIntervalloTagliandoMaiorKm()  != null ? m.getIntervalloTagliandoMaiorKm()  : 60000;
+    // Ritorna [0]=tagliando ordinario mensile, [1]=tagliando maior mensile
+    // =============================================================
+    private BigDecimal[] calcolaCostoTagliandiMensile(Motorizzazione m, int kmMensili) {
+        BigDecimal costoBase  = nvl(m.getCostoTagliandoBaseEur(),  TAGLIANDO_BASE_FB);
+        BigDecimal costoMaior = nvl(m.getCostoTagliandoMaiorEur(), TAGLIANDO_MAIOR_FB);
+        int        kmBase     = nvl(m.getIntervalloTagliandoKm(),       INTERVALLO_BASE_FB);
+        int        kmMaior    = nvl(m.getIntervalloTagliandoMaiorKm(),  INTERVALLO_MAIOR_FB);
 
-        // Costo annuo = (costoBase × nTagliandiBase) + (costoMaior × nTagliandiMaior)
-        // nTagliandiBase al netto dei maior = (kmMaior/kmBase - 1) tagliandi ordinari + 1 maior ogni kmMaior
         int kmAnnui = kmMensili * 12;
 
-        // Quanti tagliandi base per anno (incluso 1 che diventa maior)
-        double tagliandiBaseAnno  = (double) kmAnnui / kmBase;
-        // Quanti tagliandi maior per anno
         double tagliandiMaiorAnno = (double) kmAnnui / kmMaior;
-        // Tagliandi ordinari = totale base - quelli che sono maior
-        double tagliandiOrdAnno   = tagliandiBaseAnno - tagliandiMaiorAnno;
+        double tagliandiBaseAnno  = (double) kmAnnui / kmBase;
+        double tagliandiOrdAnno   = Math.max(0, tagliandiBaseAnno - tagliandiMaiorAnno);
 
-        BigDecimal costoAnnuo = costoBase.multiply(BigDecimal.valueOf(tagliandiOrdAnno))
-                .add(costoMaior.multiply(BigDecimal.valueOf(tagliandiMaiorAnno)));
+        BigDecimal mensileOrd   = costoBase.multiply(BigDecimal.valueOf(tagliandiOrdAnno))
+                .divide(BigDecimal.valueOf(12), 2, RoundingMode.HALF_UP);
+        BigDecimal mensileMaior = costoMaior.multiply(BigDecimal.valueOf(tagliandiMaiorAnno))
+                .divide(BigDecimal.valueOf(12), 2, RoundingMode.HALF_UP);
 
-        return costoAnnuo.divide(BigDecimal.valueOf(12), 2, RoundingMode.HALF_UP);
+        return new BigDecimal[]{mensileOrd, mensileMaior};
     }
 
-    // ================================================================
+    // =============================================================
     // BOLLO ACI MENSILE
-    // Tariffe 2024: 2.58 €/kW (primi 100 kW) + 3.87 €/kW (oltre 100 kW)
-    // Diesel: maggiorazione 0.26/0.39 €/kW
-    // Elettrici: esenti
-    // ================================================================
+    // =============================================================
     private BigDecimal calcolaBolloMensile(Motorizzazione m) {
-        TipoCarburante tipo = m.getTipoCarburante();
-        int kw = m.getPotenzaKw() != null ? m.getPotenzaKw() : 70;
+        if (m.getTipoCarburante() == TipoCarburante.ELETTRICO) return BigDecimal.ZERO;
 
-        // Elettrici puri: esenti (trattiamo come 0)
-        if (tipo == TipoCarburante.ELETTRICO) {
-            return BigDecimal.ZERO;
-        }
+        int        kw     = m.getPotenzaKw() != null ? m.getPotenzaKw() : 70;
+        BigDecimal bBase  = BOLLO_BASE_KW;
+        BigDecimal bExtra = BOLLO_EXTRA_KW;
 
-        BigDecimal baseKw  = BOLLO_BASE_PER_KW;
-        BigDecimal extraKw = BOLLO_EXTRA_PER_KW;
-
-        // Maggiorazione diesel
-        if (tipo == TipoCarburante.DIESEL || tipo == TipoCarburante.IBRIDO_DIESEL) {
-            baseKw  = baseKw.add(BOLLO_DIESEL_BASE);
-            extraKw = extraKw.add(BOLLO_DIESEL_EXTRA);
+        boolean isDiesel = m.getTipoCarburante() == TipoCarburante.DIESEL
+                        || m.getTipoCarburante() == TipoCarburante.IBRIDO_DIESEL;
+        if (isDiesel) {
+            bBase  = bBase.add(BOLLO_DIESEL_BASE);
+            bExtra = bExtra.add(BOLLO_DIESEL_EXTRA);
         }
 
         BigDecimal bolloAnnuo;
         if (kw <= BOLLO_SOGLIA_KW) {
-            bolloAnnuo = baseKw.multiply(BigDecimal.valueOf(kw));
+            bolloAnnuo = bBase.multiply(BigDecimal.valueOf(kw));
         } else {
-            BigDecimal parteBassa = baseKw.multiply(BigDecimal.valueOf(BOLLO_SOGLIA_KW));
-            BigDecimal parteAlta  = extraKw.multiply(BigDecimal.valueOf(kw - BOLLO_SOGLIA_KW));
-            bolloAnnuo = parteBassa.add(parteAlta);
+            bolloAnnuo = bBase.multiply(BigDecimal.valueOf(BOLLO_SOGLIA_KW))
+                    .add(bExtra.multiply(BigDecimal.valueOf(kw - BOLLO_SOGLIA_KW)));
         }
 
-        // Minimo bollo
-        if (bolloAnnuo.compareTo(BOLLO_MINIMO) < 0) {
-            bolloAnnuo = BOLLO_MINIMO;
-        }
-
+        bolloAnnuo = bolloAnnuo.max(BOLLO_MINIMO);
         return bolloAnnuo.divide(BigDecimal.valueOf(12), 2, RoundingMode.HALF_UP);
     }
 
-    // ================================================================
-    // STIMA ASSICURAZIONE RC MENSILE
-    // Basata sul gruppo assicurativo (1-20)
-    // Fascia media per un guidatore con 5+ anni di esperienza, classe 14 BM
-    // ================================================================
-    private BigDecimal stimaAssicurazioneMensile(Motorizzazione m) {
-        int gruppo = m.getGruppoAssicurativo() != null ? m.getGruppoAssicurativo() : 10;
-        gruppo = Math.max(1, Math.min(20, gruppo)); // clamp 1-20
-
-        // Stima annua: da ~400€ (gruppo 1) a ~1800€ (gruppo 20)
-        // Interpolazione lineare: 400 + (gruppo - 1) * (1400 / 19)
+    // =============================================================
+    // ASSICURAZIONE MENSILE
+    // Usa il valore fornito dall'utente se presente, altrimenti stima
+    // =============================================================
+    private BigDecimal calcolaAssicurazioneMensile(CalcoloRequestDTO request, Motorizzazione m) {
+        if (request.getAssicurazioneAnnuaEur() != null
+                && request.getAssicurazioneAnnuaEur().compareTo(BigDecimal.ZERO) > 0) {
+            return request.getAssicurazioneAnnuaEur()
+                    .divide(BigDecimal.valueOf(12), 2, RoundingMode.HALF_UP);
+        }
+        // Stima per gruppo assicurativo (1-20) → 400-1800 €/anno
+        int gruppo = m.getGruppoAssicurativo() != null
+                ? Math.max(1, Math.min(20, m.getGruppoAssicurativo())) : 10;
         double stimaAnnua = 400.0 + (gruppo - 1) * (1400.0 / 19.0);
-
         return BigDecimal.valueOf(stimaAnnua)
                 .divide(BigDecimal.valueOf(12), 2, RoundingMode.HALF_UP);
+    }
+
+    // =============================================================
+    // GIUDIZIO E CONSIGLI
+    // =============================================================
+    private String calcolaGiudizio(BigDecimal perc) {
+        if (perc.compareTo(SOGLIA_OTTIMO) <= 0)      return "OTTIMO";
+        if (perc.compareTo(SOGLIA_ACCETTABILE) <= 0) return "ACCETTABILE";
+        if (perc.compareTo(SOGLIA_ATTENZIONE) <= 0)  return "ATTENZIONE";
+        return "CRITICO";
+    }
+
+    private String generaConsigli(BigDecimal perc, Motorizzazione m, int durata, BigDecimal anticipo) {
+        StringBuilder sb = new StringBuilder();
+        String giud = calcolaGiudizio(perc);
+
+        switch (giud) {
+            case "OTTIMO" ->
+                sb.append("Ottima scelta! L'auto assorbe meno del 20% del tuo reddito. ");
+            case "ACCETTABILE" ->
+                sb.append("La spesa è nella norma (20-30% del reddito). Gestibile con buona pianificazione. ");
+            case "ATTENZIONE" ->
+                sb.append("Attenzione: l'auto assorbe il ").append(perc).append("% del reddito. ");
+            case "CRITICO" ->
+                sb.append("CRITICO: l'auto assorbe il ").append(perc).append("% del reddito. Valuta alternative. ");
+        }
+
+        if (durata > 72) sb.append("Considera una durata del finanziamento più breve per ridurre gli interessi totali. ");
+        if (anticipo.compareTo(BigDecimal.ZERO) == 0) sb.append("Un acconto ridurrebbe la rata mensile significativamente. ");
+        if (Boolean.TRUE.equals(m.getRunFlat())) sb.append("I pneumatici run-flat di questo modello hanno un costo di sostituzione elevato. ");
+        if (m.getTipoCarburante() == TipoCarburante.DIESEL) sb.append("Verifica la compatibilità con le ZTL della tua città. ");
+
+        return sb.toString().trim();
+    }
+
+    // =============================================================
+    // UTILITY
+    // =============================================================
+    private static BigDecimal nvl(BigDecimal val, BigDecimal fallback) {
+        return val != null ? val : fallback;
+    }
+    private static int nvl(Integer val, int fallback) {
+        return val != null ? val : fallback;
     }
 }
