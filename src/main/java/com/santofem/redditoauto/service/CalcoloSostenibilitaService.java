@@ -2,10 +2,10 @@ package com.santofem.redditoauto.service;
 
 import com.santofem.redditoauto.entity.Motorizzazione;
 import com.santofem.redditoauto.entity.enums.TipoCarburante;
-import com.santofem.redditoauto.exception.ResourceNotFoundException;
 import com.santofem.redditoauto.repository.MotorizzazioneRepository;
 import com.santofem.redditoauto.service.dto.CalcoloRequestDTO;
 import com.santofem.redditoauto.service.dto.CalcoloRispostaDTO;
+import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -54,12 +54,12 @@ public class CalcoloSostenibilitaService {
     private static final int        PNEUMATICI_MESI     = 36;
 
     // ── Fallback consumi/costi ────────────────────────────────────
-    private static final BigDecimal CONSUMO_FALLBACK       = new BigDecimal("8.00");  // l/100km
-    private static final BigDecimal CONSUMO_EV_KWH_100KM   = new BigDecimal("16.00"); // kWh/100km
-    private static final BigDecimal TAGLIANDO_BASE_FB      = new BigDecimal("250.00");
-    private static final BigDecimal TAGLIANDO_MAIOR_FB     = new BigDecimal("600.00");
-    private static final int        INTERVALLO_BASE_FB     = 15_000;
-    private static final int        INTERVALLO_MAIOR_FB    = 60_000;
+    private static final BigDecimal CONSUMO_FALLBACK      = new BigDecimal("8.00");
+    private static final BigDecimal CONSUMO_EV_KWH_100KM  = new BigDecimal("16.00");
+    private static final BigDecimal TAGLIANDO_BASE_FB     = new BigDecimal("250.00");
+    private static final BigDecimal TAGLIANDO_MAIOR_FB    = new BigDecimal("600.00");
+    private static final int        INTERVALLO_BASE_FB    = 15_000;
+    private static final int        INTERVALLO_MAIOR_FB   = 60_000;
 
     // ── Soglie sostenibilità ──────────────────────────────────────
     private static final BigDecimal SOGLIA_OTTIMO      = new BigDecimal("20.00");
@@ -73,35 +73,36 @@ public class CalcoloSostenibilitaService {
     public CalcoloRispostaDTO calcola(CalcoloRequestDTO request) {
 
         Motorizzazione m = motorizzazioneRepository.findById(request.getMotorizzazioneId())
-                .orElseThrow(() -> new ResourceNotFoundException(
+                .orElseThrow(() -> new EntityNotFoundException(
                         "Motorizzazione non trovata con id: " + request.getMotorizzazioneId()));
 
         // TAN da percentuale a decimale (es. 7.5 → 0.075)
         BigDecimal tanDecimale = request.getTanPercentuale()
                 .divide(BigDecimal.valueOf(100), 10, RoundingMode.HALF_UP);
 
-        BigDecimal prezzoAuto    = m.getPrezzoListinoEur() != null
-                ? m.getPrezzoListinoEur()
-                : BigDecimal.ZERO;
-        BigDecimal anticipo      = request.getAcconto();
-        BigDecimal prezzoFinanz  = prezzoAuto.subtract(anticipo).max(BigDecimal.ZERO);
-        int        durata        = request.getDurataFinanziamentoMesi();
-        int        kmMensili     = request.getKmMensiliStimati();
-        BigDecimal prezzoCarb    = request.getPrezzoCombustibileLitro();
+        BigDecimal prezzoAuto   = m.getPrezzoListinoEur() != null
+                ? m.getPrezzoListinoEur() : BigDecimal.ZERO;
+        BigDecimal anticipo     = request.getAcconto();
+        BigDecimal prezzoFinanz = prezzoAuto.subtract(anticipo).max(BigDecimal.ZERO);
+        int        durata       = request.getDurataFinanziamentoMesi();
+        int        kmMensili    = request.getKmMensiliStimati();
+        BigDecimal prezzoCarb   = request.getPrezzoCombustibileLitro();
 
         // ── Calcoli singoli ───────────────────────────────────────
-        BigDecimal rata                 = calcolaRataFrancese(prezzoFinanz, tanDecimale, durata);
-        BigDecimal interessiTotali      = rata.multiply(BigDecimal.valueOf(durata)).subtract(prezzoFinanz).max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP);
-        BigDecimal costoTotaleFinanz    = rata.multiply(BigDecimal.valueOf(durata)).setScale(2, RoundingMode.HALF_UP);
-        BigDecimal costoCarb            = calcolaCostoCarburanteMensile(m, kmMensili, prezzoCarb);
-        BigDecimal costoPneumMensile    = calcolaCostoPneumaticiMensile(m);
-        BigDecimal[] tagliandi          = calcolaCostoTagliandiMensile(m, kmMensili); // [0]=base, [1]=maior
-        BigDecimal bolloMensile         = calcolaBolloMensile(m);
-        BigDecimal assicMensile         = calcolaAssicurazioneMensile(request, m);
+        BigDecimal rata              = calcolaRataFrancese(prezzoFinanz, tanDecimale, durata);
+        BigDecimal interessiTotali   = rata.multiply(BigDecimal.valueOf(durata))
+                .subtract(prezzoFinanz).max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP);
+        BigDecimal costoTotaleFinanz = rata.multiply(BigDecimal.valueOf(durata))
+                .setScale(2, RoundingMode.HALF_UP);
+        BigDecimal costoCarb         = calcolaCostoCarburanteMensile(m, kmMensili, prezzoCarb);
+        BigDecimal costoPneum        = calcolaCostoPneumaticiMensile(m);
+        BigDecimal[] tagliandi       = calcolaCostoTagliandiMensile(m, kmMensili);
+        BigDecimal bolloMensile      = calcolaBolloMensile(m);
+        BigDecimal assicMensile      = calcolaAssicurazioneMensile(request, m);
 
         // ── Totali ────────────────────────────────────────────────
         BigDecimal totCostiVivi = costoCarb
-                .add(costoPneumMensile)
+                .add(costoPneum)
                 .add(tagliandi[0])
                 .add(tagliandi[1])
                 .add(bolloMensile)
@@ -116,9 +117,9 @@ public class CalcoloSostenibilitaService {
                 .multiply(BigDecimal.valueOf(100))
                 .setScale(2, RoundingMode.HALF_UP);
 
-        String giudizio         = calcolaGiudizio(percReddito);
-        String consigli         = generaConsigli(percReddito, m, durata, anticipo);
-        boolean sostenibile     = percReddito.compareTo(SOGLIA_ACCETTABILE) <= 0;
+        String  giudizio    = calcolaGiudizio(percReddito);
+        String  consigli    = generaConsigli(percReddito, m, durata, anticipo);
+        boolean sostenibile = percReddito.compareTo(SOGLIA_ACCETTABILE) <= 0;
 
         // ── Label auto ───────────────────────────────────────────
         String label = String.format("%s %s %s (%d)",
@@ -138,7 +139,7 @@ public class CalcoloSostenibilitaService {
                 .costoTotaleFinanziamento(costoTotaleFinanz)
                 .interessiTotali(interessiTotali)
                 .costoCarburanteMensile(costoCarb)
-                .costoPneumaticiMensile(costoPneumMensile)
+                .costoPneumaticiMensile(costoPneum)
                 .costoTagliandoMensile(tagliandi[0])
                 .costoTagliandoMaiorMensile(tagliandi[1])
                 .costoBolloMensile(bolloMensile)
@@ -165,7 +166,7 @@ public class CalcoloSostenibilitaService {
             return capitale.divide(BigDecimal.valueOf(n), 2, RoundingMode.HALF_UP);
         }
 
-        MathContext mc = new MathContext(15, RoundingMode.HALF_UP);
+        MathContext mc     = new MathContext(15, RoundingMode.HALF_UP);
         BigDecimal unoPiuI = BigDecimal.ONE.add(i);
         BigDecimal potenza = unoPiuI.pow(n, mc);
 
@@ -176,7 +177,6 @@ public class CalcoloSostenibilitaService {
 
     // =============================================================
     // COSTO CARBURANTE MENSILE
-    // Usa il prezzo fornito dall'utente nel request (prezzoCombustibileLitro)
     // =============================================================
     private BigDecimal calcolaCostoCarburanteMensile(
             Motorizzazione m, int kmMensili, BigDecimal prezzoCarburante) {
@@ -184,7 +184,6 @@ public class CalcoloSostenibilitaService {
         TipoCarburante tipo = m.getTipoCarburante();
 
         if (tipo == TipoCarburante.ELETTRICO) {
-            // kWh/100km × km × €/kWh  (prezzoCarburante è €/kWh per EV)
             return CONSUMO_EV_KWH_100KM
                     .multiply(BigDecimal.valueOf(kmMensili))
                     .divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP)
@@ -196,7 +195,6 @@ public class CalcoloSostenibilitaService {
                 ? m.getConsumoMedioLitri100km() : CONSUMO_FALLBACK;
 
         if (tipo == TipoCarburante.IBRIDO_PLUGIN) {
-            // 60% km elettrico + 40% termico
             BigDecimal kmTermici   = BigDecimal.valueOf(kmMensili).multiply(new BigDecimal("0.40"));
             BigDecimal kmElettrico = BigDecimal.valueOf(kmMensili).multiply(new BigDecimal("0.60"));
             BigDecimal costoTerm   = consumo.multiply(kmTermici)
@@ -204,7 +202,7 @@ public class CalcoloSostenibilitaService {
                     .multiply(prezzoCarburante);
             BigDecimal costoElett  = CONSUMO_EV_KWH_100KM.multiply(kmElettrico)
                     .divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP)
-                    .multiply(new BigDecimal("0.25")); // €/kWh fisso per la quota elettrica
+                    .multiply(new BigDecimal("0.25"));
             return costoTerm.add(costoElett).setScale(2, RoundingMode.HALF_UP);
         }
 
@@ -225,20 +223,18 @@ public class CalcoloSostenibilitaService {
     }
 
     // =============================================================
-    // COSTO TAGLIANDI MENSILE
-    // Ritorna [0]=tagliando ordinario mensile, [1]=tagliando maior mensile
+    // COSTO TAGLIANDI MENSILE — [0]=ordinario, [1]=maior
     // =============================================================
     private BigDecimal[] calcolaCostoTagliandiMensile(Motorizzazione m, int kmMensili) {
         BigDecimal costoBase  = nvl(m.getCostoTagliandoBaseEur(),  TAGLIANDO_BASE_FB);
         BigDecimal costoMaior = nvl(m.getCostoTagliandoMaiorEur(), TAGLIANDO_MAIOR_FB);
-        int        kmBase     = nvl(m.getIntervalloTagliandoKm(),       INTERVALLO_BASE_FB);
-        int        kmMaior    = nvl(m.getIntervalloTagliandoMaiorKm(),  INTERVALLO_MAIOR_FB);
+        int        kmBase     = nvl(m.getIntervalloTagliandoKm(),      INTERVALLO_BASE_FB);
+        int        kmMaior    = nvl(m.getIntervalloTagliandoMaiorKm(), INTERVALLO_MAIOR_FB);
 
-        int kmAnnui = kmMensili * 12;
-
-        double tagliandiMaiorAnno = (double) kmAnnui / kmMaior;
-        double tagliandiBaseAnno  = (double) kmAnnui / kmBase;
-        double tagliandiOrdAnno   = Math.max(0, tagliandiBaseAnno - tagliandiMaiorAnno);
+        int    kmAnnui             = kmMensili * 12;
+        double tagliandiMaiorAnno  = (double) kmAnnui / kmMaior;
+        double tagliandiBaseAnno   = (double) kmAnnui / kmBase;
+        double tagliandiOrdAnno    = Math.max(0, tagliandiBaseAnno - tagliandiMaiorAnno);
 
         BigDecimal mensileOrd   = costoBase.multiply(BigDecimal.valueOf(tagliandiOrdAnno))
                 .divide(BigDecimal.valueOf(12), 2, RoundingMode.HALF_UP);
@@ -265,21 +261,17 @@ public class CalcoloSostenibilitaService {
             bExtra = bExtra.add(BOLLO_DIESEL_EXTRA);
         }
 
-        BigDecimal bolloAnnuo;
-        if (kw <= BOLLO_SOGLIA_KW) {
-            bolloAnnuo = bBase.multiply(BigDecimal.valueOf(kw));
-        } else {
-            bolloAnnuo = bBase.multiply(BigDecimal.valueOf(BOLLO_SOGLIA_KW))
-                    .add(bExtra.multiply(BigDecimal.valueOf(kw - BOLLO_SOGLIA_KW)));
-        }
+        BigDecimal bolloAnnuo = kw <= BOLLO_SOGLIA_KW
+                ? bBase.multiply(BigDecimal.valueOf(kw))
+                : bBase.multiply(BigDecimal.valueOf(BOLLO_SOGLIA_KW))
+                        .add(bExtra.multiply(BigDecimal.valueOf(kw - BOLLO_SOGLIA_KW)));
 
-        bolloAnnuo = bolloAnnuo.max(BOLLO_MINIMO);
-        return bolloAnnuo.divide(BigDecimal.valueOf(12), 2, RoundingMode.HALF_UP);
+        return bolloAnnuo.max(BOLLO_MINIMO)
+                .divide(BigDecimal.valueOf(12), 2, RoundingMode.HALF_UP);
     }
 
     // =============================================================
     // ASSICURAZIONE MENSILE
-    // Usa il valore fornito dall'utente se presente, altrimenti stima
     // =============================================================
     private BigDecimal calcolaAssicurazioneMensile(CalcoloRequestDTO request, Motorizzazione m) {
         if (request.getAssicurazioneAnnuaEur() != null
@@ -287,7 +279,6 @@ public class CalcoloSostenibilitaService {
             return request.getAssicurazioneAnnuaEur()
                     .divide(BigDecimal.valueOf(12), 2, RoundingMode.HALF_UP);
         }
-        // Stima per gruppo assicurativo (1-20) → 400-1800 €/anno
         int gruppo = m.getGruppoAssicurativo() != null
                 ? Math.max(1, Math.min(20, m.getGruppoAssicurativo())) : 10;
         double stimaAnnua = 400.0 + (gruppo - 1) * (1400.0 / 19.0);
@@ -306,24 +297,24 @@ public class CalcoloSostenibilitaService {
     }
 
     private String generaConsigli(BigDecimal perc, Motorizzazione m, int durata, BigDecimal anticipo) {
-        StringBuilder sb = new StringBuilder();
-        String giud = calcolaGiudizio(perc);
+        StringBuilder sb   = new StringBuilder();
+        String        giud = calcolaGiudizio(perc);
 
         switch (giud) {
-            case "OTTIMO" ->
-                sb.append("Ottima scelta! L'auto assorbe meno del 20% del tuo reddito. ");
-            case "ACCETTABILE" ->
-                sb.append("La spesa è nella norma (20-30% del reddito). Gestibile con buona pianificazione. ");
-            case "ATTENZIONE" ->
-                sb.append("Attenzione: l'auto assorbe il ").append(perc).append("% del reddito. ");
-            case "CRITICO" ->
-                sb.append("CRITICO: l'auto assorbe il ").append(perc).append("% del reddito. Valuta alternative. ");
+            case "OTTIMO"      -> sb.append("Ottima scelta! L'auto assorbe meno del 20% del tuo reddito. ");
+            case "ACCETTABILE" -> sb.append("La spesa è nella norma (20-30% del reddito). Gestibile con buona pianificazione. ");
+            case "ATTENZIONE"  -> sb.append("Attenzione: l'auto assorbe il ").append(perc).append("% del reddito. ");
+            case "CRITICO"     -> sb.append("CRITICO: l'auto assorbe il ").append(perc).append("% del reddito. Valuta alternative. ");
         }
 
-        if (durata > 72) sb.append("Considera una durata del finanziamento più breve per ridurre gli interessi totali. ");
-        if (anticipo.compareTo(BigDecimal.ZERO) == 0) sb.append("Un acconto ridurrebbe la rata mensile significativamente. ");
-        if (Boolean.TRUE.equals(m.getRunFlat())) sb.append("I pneumatici run-flat di questo modello hanno un costo di sostituzione elevato. ");
-        if (m.getTipoCarburante() == TipoCarburante.DIESEL) sb.append("Verifica la compatibilità con le ZTL della tua città. ");
+        if (durata > 72)
+            sb.append("Considera una durata del finanziamento più breve per ridurre gli interessi totali. ");
+        if (anticipo.compareTo(BigDecimal.ZERO) == 0)
+            sb.append("Un acconto ridurrebbe la rata mensile significativamente. ");
+        if (Boolean.TRUE.equals(m.getRunFlat()))
+            sb.append("I pneumatici run-flat di questo modello hanno un costo di sostituzione elevato. ");
+        if (m.getTipoCarburante() == TipoCarburante.DIESEL)
+            sb.append("Verifica la compatibilità con le ZTL della tua città. ");
 
         return sb.toString().trim();
     }
@@ -334,6 +325,7 @@ public class CalcoloSostenibilitaService {
     private static BigDecimal nvl(BigDecimal val, BigDecimal fallback) {
         return val != null ? val : fallback;
     }
+
     private static int nvl(Integer val, int fallback) {
         return val != null ? val : fallback;
     }
