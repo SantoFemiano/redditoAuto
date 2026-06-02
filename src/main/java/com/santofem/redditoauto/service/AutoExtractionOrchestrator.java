@@ -12,6 +12,7 @@ import com.santofem.redditoauto.mapper.CarDataMapper;
 import com.santofem.redditoauto.repository.MarcaRepository;
 import com.santofem.redditoauto.repository.ModelloRepository;
 import com.santofem.redditoauto.repository.MotorizzazioneRepository;
+import com.santofem.redditoauto.scraper.ScraperResult;
 import com.santofem.redditoauto.scraper.WebScraper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -41,17 +42,17 @@ public class AutoExtractionOrchestrator {
 
     @Transactional
     public MotorizzazioneResponseDTO estraiDaParametri(
-            String marca, String modello, String motore, int anno) {
+            String marca, String modello, String motore, int anno,
+            int potenzaCv, String tipoCarburante, String tipoCambio) {
 
-        log.info("[Orchestratore] Richiesta estrazione: {} {} {} {}",
-            marca, modello, motore, anno);
+        log.info("[Orchestratore] Richiesta estrazione: {} {} {} {} (cv={} carb={} cambio={})",
+            marca, modello, motore, anno, potenzaCv, tipoCarburante, tipoCambio);
 
-        // 1. Cache DB — cerca per marca+modello+anno+motore (match esatto sul nome motore)
+        // 1. Cache DB
         List<Motorizzazione> esistenti = motorizzazioneRepository
             .findByMarcaModelloAnno(marca, modello, anno);
 
         if (!esistenti.isEmpty()) {
-            // Prima cerca match esatto sul nomeMotore
             Optional<Motorizzazione> exactMatch = esistenti.stream()
                 .filter(m -> motore.equalsIgnoreCase(m.getNomeMotore()))
                 .findFirst();
@@ -59,7 +60,6 @@ public class AutoExtractionOrchestrator {
                 log.info("[Orchestratore] Cache hit esatto: motorizzazione id={}", exactMatch.get().getId());
                 return carDataMapper.toResponseDTO(exactMatch.get());
             }
-            // Poi cerca match parziale (per gestire piccole differenze di naming)
             Optional<Motorizzazione> partialMatch = esistenti.stream()
                 .filter(m -> m.getNomeMotore() != null
                     && !isPlaceholder(m.getNomeMotore())
@@ -75,19 +75,30 @@ public class AutoExtractionOrchestrator {
 
         log.info("[Orchestratore] Cache miss: avvio scraping per {} {} {}", marca, modello, motore);
 
-        // 2. Scraping web
-        Optional<String> testoOpt = webScraper.scrape(marca, modello, motore, anno);
+        // 2. Scraping web con parametri estesi per motor-scoring
+        ScraperResult scraperResult = webScraper.scrapeConRisultato(
+            marca, modello, motore, anno, potenzaCv, tipoCarburante, tipoCambio);
 
         CarDataDTO dto;
         String fonteDati;
+        String warningAnno = null;
 
-        if (testoOpt.isPresent()) {
+        if (scraperResult.hasText()) {
+            // Usa l'anno EFFETTIVO trovato dallo scraper (non quello richiesto dall'utente)
+            int annoEffettivo = scraperResult.annoEffettivo();
+            warningAnno = scraperResult.buildWarningAnno();
+
+            if (scraperResult.annoFallback()) {
+                log.warn("[Orchestratore] Anno richiesto={} non disponibile: salvataggio con anno effettivo={}",
+                    anno, annoEffettivo);
+            }
+
             log.info("[Orchestratore] Scraping riuscito ({} chars), invio all'AI extractor",
-                testoOpt.get().length());
+                scraperResult.testo().length());
             CarDataDTO raw = callAiSafely(() -> aiExtractor.extractCarData(
-                marca, modello, motore, String.valueOf(anno), testoOpt.get()));
-            dto = overrideIdentita(raw, marca, modello, motore, anno);
-            fonteDati = "scraping:auto-data.net:" + marca + ":" + modello + ":" + anno;
+                marca, modello, motore, String.valueOf(annoEffettivo), scraperResult.testo()));
+            dto = overrideIdentita(raw, marca, modello, motore, annoEffettivo);
+            fonteDati = "scraping:auto-data.net:" + marca + ":" + modello + ":" + annoEffettivo;
         } else {
             log.warn("[Orchestratore] Scraping fallito. Fallback AI-direct per {} {} {} {}",
                 marca, modello, motore, anno);
@@ -97,7 +108,22 @@ public class AutoExtractionOrchestrator {
             fonteDati = "ai-direct:" + marca + ":" + modello + ":" + anno;
         }
 
-        return persistiDto(dto, fonteDati);
+        MotorizzazioneResponseDTO response = persistiDto(dto, fonteDati);
+        // Propaga il warning anno al frontend
+        if (warningAnno != null) {
+            response.setWarningAnno(warningAnno);
+            log.info("[Orchestratore] Warning anno propagato: {}", warningAnno);
+        }
+        return response;
+    }
+
+    /**
+     * Overload di compatibilità per chiamate senza i nuovi parametri opzionali.
+     */
+    @Transactional
+    public MotorizzazioneResponseDTO estraiDaParametri(
+            String marca, String modello, String motore, int anno) {
+        return estraiDaParametri(marca, modello, motore, anno, 0, null, null);
     }
 
     // -----------------------------------------------
@@ -130,10 +156,6 @@ public class AutoExtractionOrchestrator {
     // OVERRIDE POST-AI
     // -----------------------------------------------
 
-    /**
-     * Sovrascrive sempre i campi identitari con i valori noti dal frontend.
-     * Difesa principale contro placeholder letterali e valori errati da Gemini.
-     */
     private CarDataDTO overrideIdentita(
             CarDataDTO raw, String marca, String modello, String motore, int anno) {
 
@@ -174,10 +196,6 @@ public class AutoExtractionOrchestrator {
         );
     }
 
-    /**
-     * Rileva placeholder del template o valori spazzatura.
-     * Controlla: {campo}, {{campo}}, la stringa 'null', blank.
-     */
     private boolean isPlaceholder(String value) {
         if (value == null || value.isBlank()) return true;
         String trimmed = value.trim();
@@ -223,7 +241,6 @@ public class AutoExtractionOrchestrator {
             );
         }
 
-        // Deduplicazione per marca+modello+anno+nomeMotore
         List<Motorizzazione> esistenti = motorizzazioneRepository
             .findByMarcaModelloAnno(dto.marca(), dto.modello(), dto.annoProduzione());
         if (!esistenti.isEmpty()) {
@@ -239,11 +256,9 @@ public class AutoExtractionOrchestrator {
                     dedup.get().getId(), dedup.get().getNomeMotore());
                 return carDataMapper.toResponseDTO(dedup.get());
             }
-            // Se esistenti ma nessun match sul motore: procede con nuovo salvataggio
             log.info("[Orchestratore] Stessa marca/modello/anno ma motore diverso: procedo con nuovo salvataggio.");
         }
 
-        // Risolve/crea Marca
         Marca marca = marcaRepository.findByNomeIgnoreCase(dto.marca())
             .orElseGet(() -> {
                 log.info("[DB] Creazione nuova marca: {}", dto.marca());
@@ -251,7 +266,6 @@ public class AutoExtractionOrchestrator {
                     Marca.builder().nome(capitalizza(dto.marca())).build());
             });
 
-        // Risolve/crea Modello
         Modello modello = modelloRepository
             .findByMarcaIdAndNomeIgnoreCase(marca.getId(), dto.modello())
             .orElseGet(() -> {

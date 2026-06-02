@@ -14,6 +14,9 @@ import java.time.LocalDateTime;
  *
  * Gli enum (tipoCarburante, tipoCambio) sono esposti come String
  * per semplicita' di serializzazione JSON verso il frontend Angular.
+ *
+ * Il campo warningAnno è popolato quando l'anno richiesto non aveva
+ * una scheda corrispondente e si è usata la generazione più recente disponibile.
  */
 @Getter
 @Setter
@@ -59,4 +62,12 @@ public class MotorizzazioneResponseDTO {
     private String        fonteDati;
     private LocalDateTime dataEstrazione;
     private Boolean       confermatoManualmente;
+
+    /**
+     * Avviso all'utente quando l'anno richiesto non era disponibile
+     * e si è usata la generazione più vicina.
+     * Null se non c'è nessun mismatch di anno.
+     * Esempio: "Dati non disponibili per il 2025. Mostro la versione 2024."
+     */
+    private String warningAnno;
 }
