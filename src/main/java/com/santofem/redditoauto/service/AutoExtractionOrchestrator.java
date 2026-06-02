@@ -45,7 +45,7 @@ import java.util.Optional;
 @Slf4j
 public class AutoExtractionOrchestrator {
 
-    private final WebScraper webScraper;                          // FIX: era WebScraperService
+    private final WebScraper webScraper;
     private final AiCarDataExtractor aiExtractor;
     private final CarDataMapper carDataMapper;
     private final MarcaRepository marcaRepository;
@@ -121,11 +121,6 @@ public class AutoExtractionOrchestrator {
     @Transactional
     public MotorizzazioneResponseDTO estraiDaUrl(String url, String fonteDati) {
         log.info("[Orchestratore] Estrazione da URL: {}", url);
-
-        // Scraping con fonte singola: costruiamo una ScraperSource diretta
-        // e usiamo il metodo fetchAndParse del WebScraperService
-        // Per semplicita' usiamo una query generica passando l'URL come testo raw
-        // (il WebScraper.scrape() non accetta URL diretti per design)
         throw new UnsupportedOperationException(
             "estraiDaUrl() non ancora implementato. Usa estraiDaParametri() invece.");
     }
@@ -158,8 +153,8 @@ public class AutoExtractionOrchestrator {
 
         if (!esistenti.isEmpty()) {
             log.info("[Orchestratore] Dedup: motorizzazione gia' presente (id={})",
-                esistenti.getFirst().getId());
-            return carDataMapper.toResponseDTO(esistenti.getFirst());
+                esistenti.get(0).getId());  // FIX: get(0) invece di getFirst() — compatibile Java 17
+            return carDataMapper.toResponseDTO(esistenti.get(0));
         }
 
         // Step 4: Risolve/crea Marca (find-or-create)
