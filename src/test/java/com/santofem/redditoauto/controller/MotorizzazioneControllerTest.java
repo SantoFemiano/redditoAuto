@@ -1,7 +1,7 @@
 package com.santofem.redditoauto.controller;
 
 import com.santofem.redditoauto.controller.dto.MotorizzazioneResponseDTO;
-import com.santofem.redditoauto.service.MotorizzazioneQueryService;
+import com.santofem.redditoauto.service.MotorizzazioneService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -21,7 +21,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class MotorizzazioneControllerTest {
 
     @Autowired MockMvc mvc;
-    @MockitoBean MotorizzazioneQueryService queryService;
+    @MockitoBean MotorizzazioneService motorizzazioneService;
 
     private MotorizzazioneResponseDTO sampleDTO() {
         return MotorizzazioneResponseDTO.builder()
@@ -34,9 +34,9 @@ class MotorizzazioneControllerTest {
     }
 
     @Test
-    @DisplayName("GET /motorizzazioni/{id} → 200 se esiste")
+    @DisplayName("GET /motorizzazioni/{id} \u2192 200 se esiste")
     void getById_ok() throws Exception {
-        when(queryService.findById(1L)).thenReturn(Optional.of(sampleDTO()));
+        when(motorizzazioneService.findById(1L)).thenReturn(Optional.of(sampleDTO()));
 
         mvc.perform(get("/api/v1/motorizzazioni/1"))
             .andExpect(status().isOk())
@@ -45,18 +45,18 @@ class MotorizzazioneControllerTest {
     }
 
     @Test
-    @DisplayName("GET /motorizzazioni/{id} → 404 se non esiste")
+    @DisplayName("GET /motorizzazioni/{id} \u2192 404 se non esiste")
     void getById_notFound() throws Exception {
-        when(queryService.findById(99L)).thenReturn(Optional.empty());
+        when(motorizzazioneService.findById(99L)).thenReturn(Optional.empty());
 
         mvc.perform(get("/api/v1/motorizzazioni/99"))
             .andExpect(status().isNotFound());
     }
 
     @Test
-    @DisplayName("GET /motorizzazioni/cerca → 200 con lista risultati")
+    @DisplayName("GET /motorizzazioni/cerca \u2192 200 con lista risultati")
     void cerca_ok() throws Exception {
-        when(queryService.cerca(anyString(), anyString(), anyInt()))
+        when(motorizzazioneService.cerca(anyString(), anyString(), anyInt()))
             .thenReturn(List.of(sampleDTO()));
 
         mvc.perform(get("/api/v1/motorizzazioni/cerca")
@@ -68,9 +68,9 @@ class MotorizzazioneControllerTest {
     }
 
     @Test
-    @DisplayName("GET /motorizzazioni/cerca → 200 con lista vuota")
+    @DisplayName("GET /motorizzazioni/cerca \u2192 200 con lista vuota")
     void cerca_listaVuota() throws Exception {
-        when(queryService.cerca(anyString(), anyString(), anyInt()))
+        when(motorizzazioneService.cerca(anyString(), anyString(), anyInt()))
             .thenReturn(List.of());
 
         mvc.perform(get("/api/v1/motorizzazioni/cerca")
