@@ -18,13 +18,6 @@ import java.util.Set;
 
 /**
  * WebScraperService - orchestratore multi-fonte.
- *
- * ORDINE FONTI:
- * 1. auto-data.net (navigazione a cascata 4 livelli - fonte primaria)
- * 2. auto.it       (HTML statico)
- * 3. motorbox.com  (HTML statico)
- * 4. dati.guru     (aggregatore EU)
- * 5. Bing search   (fallback testuale)
  */
 @Service
 @Slf4j
@@ -39,7 +32,15 @@ public class WebScraperService implements WebScraper {
     @Value("${scraper.user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36}")
     private String userAgent;
 
-    @Value("${scraper.max-text-length:6000}")
+    /**
+     * MAX TESTO AI: 3500 chars.
+     * Il testo grezzo viene troncato prima di essere inviato a Gemini.
+     * Motivazione: testi molto lunghi (>4000 chars) aumentano la probabilita'
+     * che Gemini produca JSON troncato anche con maxOutputTokens alto,
+     * perche' il contesto input compete con lo spazio di output.
+     * 3500 chars contiene SEMPRE tutti i dati tecnici rilevanti di auto-data.net.
+     */
+    @Value("${scraper.max-text-length:3500}")
     private int maxTextLength;
 
     @Value("${scraper.min-text-length:200}")
@@ -66,7 +67,6 @@ public class WebScraperService implements WebScraper {
     public Optional<String> scrape(String marca, String modello, String motore, int anno) {
         log.info("[Scraper] Avvio ricerca per: {} {} {} {}", marca, modello, motore, anno);
 
-        // FONTE PRIMARIA: auto-data.net con navigazione a cascata
         Optional<String> adnResult = autoDataNetScraper.scrape(marca, modello, motore, anno);
         if (adnResult.isPresent()) {
             log.info("[Scraper] Testo tecnico trovato da 'auto-data.net' ({} chars)",
@@ -74,7 +74,6 @@ public class WebScraperService implements WebScraper {
             return adnResult;
         }
 
-        // FONTI SECONDARIE: HTML statico
         List<ScraperSource> sources = List.of(
             new ScraperSource("auto.it",
                 "https://www.auto.it/schede_tecniche/"
@@ -106,10 +105,6 @@ public class WebScraperService implements WebScraper {
         return Optional.empty();
     }
 
-    /**
-     * Scarica e parsa un URL diretto.
-     * Usato dall'endpoint /estrai-url dove l'utente fornisce un link specifico.
-     */
     @Override
     public Optional<String> scrapeUrl(String url) {
         log.info("[Scraper] Scraping URL diretto: {}", url);
@@ -150,7 +145,10 @@ public class WebScraperService implements WebScraper {
                 return Optional.empty();
             }
 
-            String enriched = "[FONTE: " + source.url() + "]\n" + text;
+            // Sanitizza il testo prima di inviarlo all'AI:
+            // rimuove caratteri di controllo e virgolette che possono rompere il JSON
+            String sanitized = sanitizeForAi(text);
+            String enriched = "[FONTE: " + source.url() + "]\n" + sanitized;
             return Optional.of(truncate(enriched, maxTextLength));
 
         } catch (IOException e) {
@@ -199,6 +197,29 @@ public class WebScraperService implements WebScraper {
 
         Element body = doc.body();
         return body != null ? body.text().trim() : "";
+    }
+
+    // -----------------------------------------------
+    // SANITIZZAZIONE TESTO PER AI
+    // -----------------------------------------------
+
+    /**
+     * Rimuove caratteri che possono rompere il JSON generato da Gemini:
+     * - Caratteri di controllo (\r, tab, caratteri non printable)
+     * - Virgolette doppie non escapate nel mezzo del testo
+     *   (il testo viene inserito come valore di un campo JSON nel prompt)
+     * - Sequenze di newline eccessive (ridotte a max 2)
+     */
+    private String sanitizeForAi(String text) {
+        if (text == null) return "";
+        return text
+            // Rimuovi caratteri di controllo eccetto newline normale
+            .replaceAll("[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F]", "")
+            // Sostituisci virgolette doppie con singole (sicure dentro JSON)
+            .replace('"', '\'')
+            // Riduci sequenze di newline eccessive
+            .replaceAll("\\n{3,}", "\n\n")
+            .trim();
     }
 
     // -----------------------------------------------

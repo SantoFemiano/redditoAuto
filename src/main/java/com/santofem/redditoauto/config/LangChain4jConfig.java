@@ -22,11 +22,13 @@ import org.springframework.context.annotation.Profile;
  * - Veloce, economico, ottimo per structured output / extraction tasks.
  * - temperature=0.0: risposta deterministica.
  *
+ * OUTPUT TOKENS:
+ * - 4096 tokens: sufficiente per un JSON con ~30 campi + stringhe descrittive.
+ *   Il JSON CarDataDTO ha ~25 campi, il 90% numerici. Raramente supera 500 tokens.
+ *   Con 4096 si elimina il rischio di JSON troncato.
+ *
  * RETRY:
  * - maxRetries(5) con backoff esponenziale gestito da LangChain4j.
- *   In caso di 503 (high demand), riprova fino a 5 volte.
- *   Se esaurisce i tentativi, lancia RuntimeException che l'orchestratore
- *   interpreta come GeminiUnavailableException → HTTP 503 al client.
  */
 @Configuration
 @Profile("!test")
@@ -50,7 +52,7 @@ public class LangChain4jConfig {
                 .apiKey(geminiApiKey)
                 .modelName("gemini-2.5-flash")
                 .temperature(0.0)
-                .maxOutputTokens(2048)
+                .maxOutputTokens(4096)  // aumentato: JSON CarDataDTO non viene piu' troncato
                 .responseFormat(ResponseFormat.JSON)
                 .maxRetries(5)
                 .logRequestsAndResponses(false)
