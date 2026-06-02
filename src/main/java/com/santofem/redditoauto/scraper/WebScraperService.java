@@ -72,6 +72,29 @@ public class WebScraperService implements WebScraper {
         return Optional.empty();
     }
 
+    /**
+     * Variante arricchita che restituisce uno {@link ScraperResult} con anno effettivo
+     * e flag di fallback. Delega direttamente ad AutoDataNetScraper.
+     * Il sanitize/truncate sul testo viene lasciato all'orchestratore (che usa MAX_SCRAPING_CHARS).
+     */
+    @Override
+    public ScraperResult scrapeConRisultato(String marca, String modello, String motore,
+                                             int anno, int potenzaCv,
+                                             String tipoCarburante, String tipoCambio) {
+        log.info("[Scraper] Avvio ricerca per: {} {} {} {}", marca, modello, motore, anno);
+        ScraperResult result = autoDataNetScraper.scrapeConRisultato(
+            marca, modello, motore, anno, potenzaCv, tipoCarburante, tipoCambio);
+
+        if (result.hasText()) {
+            String sanitized = sanitizeForAi(result.testo());
+            log.info("[Scraper] Testo tecnico trovato da 'auto-data.net' ({} chars)", sanitized.length());
+            return result.withTesto(sanitized);
+        }
+
+        log.warn("[Scraper] auto-data.net non ha trovato dati per: {} {} {}", marca, modello, motore);
+        return result;
+    }
+
     @Override
     public Optional<String> scrapeUrl(String url) {
         log.info("[Scraper] Scraping URL diretto: {}", url);
