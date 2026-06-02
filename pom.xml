@@ -12,7 +12,7 @@
     <artifactId>redditoauto</artifactId>
     <version>0.0.1-SNAPSHOT</version>
     <name>RedditoAuto</name>
-    <description>Calcolatore di sostenibilità economica per auto</description>
+    <description>Calcolatore di sostenibilita economica per auto</description>
 
     <properties>
         <java.version>17</java.version>
@@ -44,6 +44,16 @@
             <groupId>org.postgresql</groupId>
             <artifactId>postgresql</artifactId>
             <scope>runtime</scope>
+        </dependency>
+
+        <!-- Flyway per le migrazioni DB -->
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-database-postgresql</artifactId>
         </dependency>
 
         <!-- H2 per i test -->
