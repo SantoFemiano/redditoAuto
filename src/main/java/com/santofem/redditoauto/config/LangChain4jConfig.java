@@ -61,7 +61,7 @@ public class LangChain4jConfig {
     public GoogleAiGeminiChatModel geminiChatModel() {
         return GoogleAiGeminiChatModel.builder()
                 .apiKey(geminiApiKey)
-                .modelName("gemini-2.0-flash")
+                .modelName("gemini-2.5-flash")
                 .temperature(0.0)
                 .maxOutputTokens(2048)
                 .responseFormat(ResponseFormat.JSON)
