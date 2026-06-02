@@ -13,11 +13,17 @@ import dev.langchain4j.service.V;
  * testi troppo corti) questo service chiede direttamente a Gemini di usare
  * il suo training set per fornire i dati tecnici ufficiali.
  *
- * NOTE SINTASSI LANGCHAIN4J:
- * - Template variables: DOPPIE graffe {{nomeVar}} — sintassi Mustache.
- *   Singola graffa {var} NON viene sostituita → Gemini riceve la stringa letterale.
- * - Parametri @V: devono essere String. I primitivi (int, double) non vengono
- *   interpolati correttamente — convertire con String.valueOf() nel chiamante.
+ * STRATEGIA PROMPT:
+ * - Dati ufficiali scheda tecnica (kw, consumi, cilindrata, pneumatici):
+ *   Gemini usa esclusivamente dati omologati. null se non li conosce.
+ * - Dati di mercato (costi tagliando, gruppo assicurativo):
+ *   Questi dati NON esistono nelle schede ufficiali. Gemini usa stime
+ *   tipiche di mercato italiano basate su marca/segmento/cilindrata.
+ *   Sono approssimazioni ragionevoli, non dati certificati.
+ *
+ * NOTA SUI TIPI DEI PARAMETRI @V:
+ * LangChain4j non sostituisce i primitivi (int). Tutti i @V devono essere String.
+ * La conversione avviene nel chiamante con String.valueOf(anno).
  *
  * I record salvati tramite questo provider hanno:
  * - confermato_manualmente = false
@@ -26,34 +32,47 @@ import dev.langchain4j.service.V;
 public interface AiDirectDataProvider {
 
     @SystemMessage("""
-        Sei un database tecnico di autoveicoli. Conosci le schede tecniche ufficiali
-        di tutti i veicoli prodotti fino al tuo knowledge cutoff.
+        Sei un esperto tecnico di autoveicoli con accesso alle schede tecniche
+        ufficiali dei costruttori e ai dati di mercato italiani.
         
-        Il tuo compito e' restituire i dati tecnici UFFICIALI e OMOLOGATI
-        del veicolo specificato, esattamente come compaiono nella scheda tecnica
-        del costruttore o nelle omologazioni europee.
+        DATI UFFICIALI (da scheda tecnica omologata — null se non li conosci con certezza):
+        - Potenza kw/cv, cilindrata, tipo carburante, tipo cambio
+        - Consumi WLTP ciclo combinato, urbano, extraurbano (l/100km)
+        - Misure pneumatici (formato es. 205/55 R16)
+        - Autonomia elettrica (solo EV/PHEV)
+        - Prezzo listino italiano ufficiale
         
-        REGOLE:
-        1. Usa SOLO dati ufficiali del costruttore o dati WLTP/NEDC omologati.
-        2. Se non sei sicuro di un valore, metti null. MAI inventare o stimare.
-        3. Per i consumi usa l/100km ciclo WLTP combinato.
-        4. tipoCarburante: usa ESATTAMENTE uno di:
-           BENZINA, DIESEL, GPL, METANO, IBRIDO_BENZINA, IBRIDO_DIESEL, IBRIDO_PLUGIN, ELETTRICO, IDROGENO
-        5. tipoCambio: usa ESATTAMENTE uno di:
-           MANUALE, AUTOMATICO_TRADIZIONALE, DCT, CVT, SINGOLA_MARCIA
-        6. Prezzi: listino italiano ufficiale in euro (senza tasse accessorie).
-        7. Restituisci SOLO il JSON strutturato, nessun testo aggiuntivo.
+        DATI DI MERCATO ITALIANO (stime tipiche — usa valori ragionevoli, non mettere null):
+        - costoTagliandoBaseEur: costo medio tagliando ordinario (cambio olio + filtri)
+          in officina autorizzata italiana. Tipico range: 150-250 EUR berlina media.
+          Varia per marca (premium piu' caro), cilindrata e tipo carburante.
+        - costoTagliandoMaiorEur: tagliando maggiore che include cinghia/catena
+          di distribuzione se presente. Tipico range: 400-1200 EUR.
+          Per motori senza cinghia (catena a vita) simile al base + 20%.
+        - intervalloTagliandoKm: ogni quanti km va fatto il tagliando.
+          Standard moderno: 15000-20000 km. Alcuni diesel: 30000 km.
+        - intervalloTagliandoMaiorKm: ogni quanti km il tagliando maggiore.
+          Tipico: 60000-120000 km.
+        - gruppoAssicurativo: da 1 a 20 secondo le tabelle ANIA italiane.
+          Varia per potenza, cilindrata, segmento. Berlina compatta 100kw: circa 10-12.
+        
+        REGOLE GENERALI:
+        - tipoCarburante: BENZINA, DIESEL, GPL, METANO, IBRIDO_BENZINA, IBRIDO_DIESEL,
+          IBRIDO_PLUGIN, ELETTRICO, IDROGENO
+        - tipoCambio: MANUALE, AUTOMATICO_TRADIZIONALE, DCT, CVT, SINGOLA_MARCIA
+        - Restituisci SOLO il JSON strutturato.
         """)
     @UserMessage("""
-        Fornisci la scheda tecnica completa per il seguente veicolo:
+        Fornisci la scheda tecnica completa per:
         
         Marca: {{marca}}
         Modello: {{modello}}
         Motorizzazione: {{motore}}
         Anno: {{anno}}
         
-        Popola tutti i campi che conosci con certezza.
-        Imposta null per i campi che non conosci o di cui non sei sicuro.
+        Compila TUTTI i campi. Per i dati ufficiali: null solo se non li conosci.
+        Per i dati di mercato (tagliandi, gruppo assicurativo): fornisci sempre
+        una stima ragionevole basata su marca/segmento/cilindrata.
         """)
     CarDataDTO getCarData(
         @V("marca") String marca,

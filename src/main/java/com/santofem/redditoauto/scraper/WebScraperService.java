@@ -20,23 +20,26 @@ import java.util.Set;
  *
  * STRATEGIA:
  * Interroga le fonti in ordine di priorita'. Alla prima risposta che supera
- * la soglia minima DI TESTO TECNICO (non solo di lunghezza), si ferma.
+ * la soglia minima di testo tecnico, si ferma.
  * Se tutte le fonti falliscono, restituisce Optional.empty().
  *
  * FONTI (in ordine di qualita' per schede tecniche):
- * 1. MotorOnline.it      — schede tecniche italiane strutturate
- * 2. SchedaTecnica.it    — dati tecnici italiani
- * 3. Motorizzazione.it   — dati ufficiali omologati
- * 4. GoogleSearch        — fallback generale
+ * 1. automoto.it     — schede tecniche italiane, HTML statico, ben strutturato
+ * 2. auto.it         — dati tecnici italiani, HTML statico
+ * 3. motorbox.com    — schede italiane, statico, buona copertura
+ * 4. dati.guru       — aggregatore schede tecniche, statico
+ * 5. bing.com search — fallback ricerca testuale (Bing < bot-protection di Google)
  *
- * NOTA: AutoScout24 e' stato RIMOSSO perche' restituisce listing di annunci,
- * non schede tecniche. Il testo estratto non contiene dati utili per l'AI
- * e causa isValid()=false → DataIntegrityViolationException sul DB.
+ * SITI ESCLUSI:
+ * - motorionline.com  : rendering JS, restituisce ~93 chars di HTML statico
+ * - schedatecnica.it  : certificato SSL scaduto / SAN mismatch
+ * - google.com/search : aggressivo anti-bot, restituisce ~86 chars
+ * - autoscout24.it    : listing annunci, non schede tecniche
+ * - mobile.de         : listing annunci in tedesco, ToS scraping vietato
  *
  * FILTRO isTestoTecnico():
- * Prima di restituire il testo, verifica che contenga keyword tecniche
- * (consumo, kw, cilindrata...). Testi che non le contengono vengono scartati
- * anche se superano la lunghezza minima.
+ * Prima di restituire il testo, verifica che contenga almeno 2 keyword tecniche.
+ * Difende dall'invio di listing/homepage/pagine di errore all'AI extractor.
  */
 @Service
 @Slf4j
@@ -45,7 +48,7 @@ public class WebScraperService implements WebScraper {
     @Value("${scraper.timeout-ms:8000}")
     private int timeoutMs;
 
-    @Value("${scraper.user-agent:Mozilla/5.0 (compatible; RedditoAutoBot/1.0)}")
+    @Value("${scraper.user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36}")
     private String userAgent;
 
     @Value("${scraper.max-text-length:6000}")
@@ -67,21 +70,28 @@ public class WebScraperService implements WebScraper {
 
     @Override
     public Optional<String> scrape(String marca, String modello, String motore, int anno) {
-        String query = buildQuery(marca, modello, motore, anno);
         log.info("[Scraper] Avvio ricerca per: {} {} {} {}", marca, modello, motore, anno);
 
         List<ScraperSource> sources = List.of(
             new ScraperSource(
-                "MotorOnline",
-                buildMotorOnlineUrl(marca, modello, anno)
+                "automoto.it",
+                buildAutoMotoUrl(marca, modello, anno)
             ),
             new ScraperSource(
-                "SchedaTecnica.it",
-                buildSchedaTecnicaUrl(marca, modello, anno)
+                "auto.it",
+                buildAutoItUrl(marca, modello, anno)
             ),
             new ScraperSource(
-                "GoogleSearch",
-                buildGoogleSearchUrl(query)
+                "motorbox.com",
+                buildMotorboxUrl(marca, modello, anno)
+            ),
+            new ScraperSource(
+                "dati.guru",
+                buildDatiGuruUrl(marca, modello, anno)
+            ),
+            new ScraperSource(
+                "Bing",
+                buildBingSearchUrl(marca, modello, motore, anno)
             )
         );
 
@@ -112,6 +122,8 @@ public class WebScraperService implements WebScraper {
                 .timeout(timeoutMs)
                 .ignoreHttpErrors(true)
                 .followRedirects(true)
+                .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+                .header("Accept-Language", "it-IT,it;q=0.9,en;q=0.8")
                 .get();
 
             String text = extractRelevantText(doc, source.url());
@@ -122,11 +134,8 @@ public class WebScraperService implements WebScraper {
                 return Optional.empty();
             }
 
-            // FILTRO QUALITA': scarta testi senza keyword tecniche
-            // (es. listing annunci, pagine di categoria, risultati di ricerca generici)
             if (!isTestoTecnico(text)) {
-                log.warn("[Scraper] Testo da '{}' scartato: mancano keyword tecniche. " +
-                         "Probabile pagina di listing/annunci, non una scheda tecnica.",
+                log.warn("[Scraper] Testo da '{}' scartato: mancano keyword tecniche (probabile listing/homepage).",
                     source.name());
                 return Optional.empty();
             }
@@ -144,12 +153,6 @@ public class WebScraperService implements WebScraper {
     // VALIDATORE QUALITA' TESTO
     // -----------------------------------------------
 
-    /**
-     * Ritorna true se il testo contiene almeno 2 keyword tecniche.
-     * Difende dall'invio all'AI di testi inutili (listing annunci,
-     * pagine di ricerca, homepage) che causerebbero isValid()=false
-     * e un tentativo di salvataggio con dati null nel DB.
-     */
     boolean isTestoTecnico(String testo) {
         if (testo == null || testo.isBlank()) return false;
         String lower = testo.toLowerCase();
@@ -164,22 +167,35 @@ public class WebScraperService implements WebScraper {
     // -----------------------------------------------
 
     private String extractRelevantText(Document doc, String sourceUrl) {
+        // Rimuove elementi non utili
         doc.select("nav, header, footer, script, style, iframe, noscript, " +
                    ".cookie-banner, .ads, .advertisement, #cookie, " +
-                   ".social-share, .newsletter, .related-articles").remove();
+                   ".social-share, .newsletter, .related-articles, " +
+                   ".sidebar, .menu, .breadcrumb, .pagination").remove();
 
+        // Selettori specifici per schede tecniche, in ordine di specificita'
         String[] technicalSelectors = {
+            // Selettori generici schede tecniche
             ".scheda-tecnica",
             ".technical-specs",
             ".specs-table",
+            ".specs-container",
             ".car-specs",
-            "table.specifiche",
-            "[data-specs]",
-            ".motorizzazione",
-            "#specifiche-tecniche",
             ".dati-tecnici",
+            "#specifiche-tecniche",
+            "#dati-tecnici",
+            "[data-specs]",
+            // Selettori per automoto.it
+            ".scheda",
+            ".tecnica",
+            ".caratteristiche",
+            // Tabelle con dati
+            "table",
+            // Contenuto principale
             "article",
-            "main"
+            "main",
+            ".content",
+            "#content"
         };
 
         for (String selector : technicalSelectors) {
@@ -200,26 +216,57 @@ public class WebScraperService implements WebScraper {
     // URL BUILDERS
     // -----------------------------------------------
 
-    private String buildMotorOnlineUrl(String marca, String modello, int anno) {
-        // Formato: /scheda-tecnica/marca/modello/anno/
-        String m = slugify(marca);
-        String mod = slugify(modello);
-        return "https://www.motorionline.com/schede-tecniche/" + m + "/" + mod + "/";
+    /**
+     * automoto.it — formato: /schede-tecniche/marca/modello/anno/
+     * Esempio: https://www.automoto.it/schede-tecniche/volkswagen/golf/2022/
+     */
+    private String buildAutoMotoUrl(String marca, String modello, int anno) {
+        return "https://www.automoto.it/schede-tecniche/"
+            + slugify(marca) + "/"
+            + slugify(modello) + "/"
+            + anno + "/";
     }
 
-    private String buildSchedaTecnicaUrl(String marca, String modello, int anno) {
-        String m = slugify(marca);
-        String mod = slugify(modello);
-        return "https://www.schedatecnica.it/" + m + "/" + mod + "-" + anno + "/";
+    /**
+     * auto.it — formato: /schede-tecniche/marca-modello-anno.html
+     * Esempio: https://www.auto.it/schede_tecniche/volkswagen/golf/2022/
+     */
+    private String buildAutoItUrl(String marca, String modello, int anno) {
+        return "https://www.auto.it/schede_tecniche/"
+            + slugify(marca) + "/"
+            + slugify(modello) + "/"
+            + anno + "/";
     }
 
-    private String buildGoogleSearchUrl(String query) {
-        String q = encode("scheda tecnica " + query + " consumi tagliando kw cilindrata");
-        return "https://www.google.com/search?q=" + q;
+    /**
+     * motorbox.com — formato: /schede-tecniche/marca/modello-anno/
+     * Esempio: https://www.motorbox.com/auto/scheda-tecnica/volkswagen/golf-2022/
+     */
+    private String buildMotorboxUrl(String marca, String modello, int anno) {
+        return "https://www.motorbox.com/auto/scheda-tecnica/"
+            + slugify(marca) + "/"
+            + slugify(modello) + "-" + anno + "/";
     }
 
-    private String buildQuery(String marca, String modello, String motore, int anno) {
-        return marca + " " + modello + " " + motore + " " + anno;
+    /**
+     * dati.guru — aggregatore internazionale di specifiche tecniche, HTML statico.
+     * Esempio: https://www.dati.guru/it/volkswagen/golf/2022/
+     */
+    private String buildDatiGuruUrl(String marca, String modello, int anno) {
+        return "https://www.dati.guru/it/"
+            + slugify(marca) + "/"
+            + slugify(modello) + "/"
+            + anno + "/";
+    }
+
+    /**
+     * Bing Search — meno aggressivo di Google anti-bot.
+     * Cerca specificatamente schede tecniche italiane.
+     */
+    private String buildBingSearchUrl(String marca, String modello, String motore, int anno) {
+        String q = encode("scheda tecnica " + marca + " " + modello + " "
+            + motore + " " + anno + " consumi kw cilindrata tagliando site:it");
+        return "https://www.bing.com/search?q=" + q;
     }
 
     // -----------------------------------------------
