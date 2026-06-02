@@ -31,7 +31,7 @@ class CalcoloControllerIntegrationTest {
     @MockitoBean CalcoloSostenibilitaService calcoloService;
 
     @Test
-    @DisplayName("[IT] POST /calcolo → 200 con dati validi")
+    @DisplayName("[IT] POST /calcolo \u2192 200 con dati validi")
     void calcola_integrazione_ok() throws Exception {
         CalcoloRispostaDTO risposta = CalcoloRispostaDTO.builder()
             .marcaModelloMotore("Volkswagen Golf 2.0 TDI (2022)")

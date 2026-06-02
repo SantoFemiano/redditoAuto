@@ -8,7 +8,7 @@ import jakarta.persistence.EntityNotFoundException;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
@@ -54,7 +54,7 @@ class CalcoloControllerTest {
     }
 
     @Test
-    @DisplayName("POST /calcolo → 200 con body valido e giudizio ACCETTABILE")
+    @DisplayName("POST /calcolo \u2192 200 con body valido e giudizio ACCETTABILE")
     void calcola_ok_accettabile() throws Exception {
         when(calcoloService.calcola(any())).thenReturn(sampleRisposta("ACCETTABILE", true));
 
@@ -68,7 +68,7 @@ class CalcoloControllerTest {
     }
 
     @Test
-    @DisplayName("POST /calcolo → 200 con giudizio CRITICO")
+    @DisplayName("POST /calcolo \u2192 200 con giudizio CRITICO")
     void calcola_ok_critico() throws Exception {
         when(calcoloService.calcola(any())).thenReturn(sampleRisposta("CRITICO", false));
 
@@ -81,7 +81,7 @@ class CalcoloControllerTest {
     }
 
     @Test
-    @DisplayName("POST /calcolo → 404 se motorizzazione non esiste")
+    @DisplayName("POST /calcolo \u2192 404 se motorizzazione non esiste")
     void calcola_motorizzazioneNotFound() throws Exception {
         when(calcoloService.calcola(any()))
             .thenThrow(new EntityNotFoundException("Motorizzazione non trovata con id: 99"));
@@ -93,7 +93,7 @@ class CalcoloControllerTest {
     }
 
     @Test
-    @DisplayName("POST /calcolo → 400 con reddito mancante")
+    @DisplayName("POST /calcolo \u2192 400 con reddito mancante")
     void calcola_redditoMancante() throws Exception {
         CalcoloRequestDTO req = validRequest().toBuilder()
             .redditoNettoMensile(null)
@@ -106,7 +106,7 @@ class CalcoloControllerTest {
     }
 
     @Test
-    @DisplayName("POST /calcolo → 400 con durata < 12 mesi")
+    @DisplayName("POST /calcolo \u2192 400 con durata < 12 mesi")
     void calcola_durataTroppoCorta() throws Exception {
         CalcoloRequestDTO req = validRequest().toBuilder()
             .durataFinanziamentoMesi(6)
@@ -119,7 +119,7 @@ class CalcoloControllerTest {
     }
 
     @Test
-    @DisplayName("POST /calcolo → 400 con TAN > 30%")
+    @DisplayName("POST /calcolo \u2192 400 con TAN > 30%")
     void calcola_tanEccessivo() throws Exception {
         CalcoloRequestDTO req = validRequest().toBuilder()
             .tanPercentuale(new BigDecimal("35.0"))

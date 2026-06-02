@@ -9,7 +9,7 @@ import com.santofem.redditoauto.service.AutoExtractionOrchestrator;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
@@ -37,7 +37,7 @@ class AutoControllerTest {
     }
 
     @Test
-    @DisplayName("POST /estrai → 201 con body valido")
+    @DisplayName("POST /estrai \u2192 201 con body valido")
     void estraiDaTesto_ok() throws Exception {
         when(orchestrator.estraiDaTesto(anyString(), anyString()))
             .thenReturn(sampleResponse());
@@ -58,7 +58,7 @@ class AutoControllerTest {
     }
 
     @Test
-    @DisplayName("POST /estrai → 400 con testo troppo corto")
+    @DisplayName("POST /estrai \u2192 400 con testo troppo corto")
     void estraiDaTesto_testoTroppoCorto() throws Exception {
         String body = objectMapper.writeValueAsString(
             EstraiAutoRequestDTO.builder()
@@ -73,7 +73,7 @@ class AutoControllerTest {
     }
 
     @Test
-    @DisplayName("POST /estrai → 400 con testo assente")
+    @DisplayName("POST /estrai \u2192 400 con testo assente")
     void estraiDaTesto_testoMancante() throws Exception {
         mvc.perform(post("/api/v1/auto/estrai")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -82,7 +82,7 @@ class AutoControllerTest {
     }
 
     @Test
-    @DisplayName("POST /estrai-url → 201 con URL valido")
+    @DisplayName("POST /estrai-url \u2192 201 con URL valido")
     void estraiDaUrl_ok() throws Exception {
         when(orchestrator.estraiDaUrl(anyString(), anyString()))
             .thenReturn(sampleResponse());
@@ -100,7 +100,7 @@ class AutoControllerTest {
     }
 
     @Test
-    @DisplayName("POST /estrai-url → 400 con URL non valido (no http)")
+    @DisplayName("POST /estrai-url \u2192 400 con URL non valido (no http)")
     void estraiDaUrl_urlNonValido() throws Exception {
         String body = objectMapper.writeValueAsString(
             EstraiDaUrlRequestDTO.builder()
@@ -115,7 +115,7 @@ class AutoControllerTest {
     }
 
     @Test
-    @DisplayName("POST /estrai-url → 400 con URL mancante")
+    @DisplayName("POST /estrai-url \u2192 400 con URL mancante")
     void estraiDaUrl_urlMancante() throws Exception {
         mvc.perform(post("/api/v1/auto/estrai-url")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -124,7 +124,7 @@ class AutoControllerTest {
     }
 
     @Test
-    @DisplayName("POST /estrai-parametri → 201 con parametri validi")
+    @DisplayName("POST /estrai-parametri \u2192 201 con parametri validi")
     void estraiDaParametri_ok() throws Exception {
         when(orchestrator.estraiDaParametri(anyString(), anyString(), anyString(), anyInt()))
             .thenReturn(sampleResponse());
@@ -146,7 +146,7 @@ class AutoControllerTest {
     }
 
     @Test
-    @DisplayName("POST /estrai-parametri → 400 con anno nel futuro lontano")
+    @DisplayName("POST /estrai-parametri \u2192 400 con anno nel futuro lontano")
     void estraiDaParametri_annoFuturo() throws Exception {
         String body = objectMapper.writeValueAsString(
             EstraiDaParametriRequestDTO.builder()
@@ -164,7 +164,7 @@ class AutoControllerTest {
     }
 
     @Test
-    @DisplayName("POST /estrai-parametri → 400 con marca mancante")
+    @DisplayName("POST /estrai-parametri \u2192 400 con marca mancante")
     void estraiDaParametri_marcaMancante() throws Exception {
         String body = objectMapper.writeValueAsString(
             EstraiDaParametriRequestDTO.builder()
