@@ -13,6 +13,7 @@ import com.santofem.redditoauto.repository.MarcaRepository;
 import com.santofem.redditoauto.repository.ModelloRepository;
 import com.santofem.redditoauto.repository.MotorizzazioneRepository;
 import com.santofem.redditoauto.scraper.WebScraper;
+import com.santofem.redditoauto.scraper.WebScraperService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -28,6 +29,7 @@ import java.util.function.Supplier;
 public class AutoExtractionOrchestrator {
 
     private final WebScraper webScraper;
+    private final WebScraperService webScraperService;
     private final AiCarDataExtractor aiExtractor;
     private final AiDirectDataProvider aiDirectProvider;
     private final CarDataMapper carDataMapper;
@@ -87,14 +89,15 @@ public class AutoExtractionOrchestrator {
 
     // -----------------------------------------------
     // ENDPOINT: /estrai-url
+    // Scraping diretto di un URL specifico.
     // -----------------------------------------------
 
     @Transactional
     public MotorizzazioneResponseDTO estraiDaUrl(String url, String fonteDati) {
         log.info("[Orchestratore] Estrazione da URL: {}", url);
-        Optional<String> testoOpt = webScraper.scrapeUrl(url);
-        String testo = testoOpt.orElseThrow(() ->
-            new IllegalStateException("Impossibile estrarre testo dall'URL: " + url));
+        String testo = webScraperService.scrapeUrl(url)
+            .orElseThrow(() ->
+                new IllegalStateException("Impossibile estrarre testo dall'URL: " + url));
         CarDataDTO dto = callAiSafely(() -> aiExtractor.extractCarData(
             "sconosciuta", "sconosciuto", "sconosciuto", "0", testo));
         return persistiDto(dto, fonteDati);
