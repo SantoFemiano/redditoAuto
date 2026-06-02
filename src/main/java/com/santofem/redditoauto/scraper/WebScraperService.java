@@ -74,8 +74,7 @@ public class WebScraperService implements WebScraper {
 
     /**
      * Variante arricchita che restituisce uno {@link ScraperResult} con anno effettivo
-     * e flag di fallback. Delega direttamente ad AutoDataNetScraper.
-     * Il sanitize/truncate sul testo viene lasciato all'orchestratore (che usa MAX_SCRAPING_CHARS).
+     * e flag di fallback. Delega ad AutoDataNetScraper e sanitizza il testo prima di restituirlo.
      */
     @Override
     public ScraperResult scrapeConRisultato(String marca, String modello, String motore,
@@ -88,7 +87,8 @@ public class WebScraperService implements WebScraper {
         if (result.hasText()) {
             String sanitized = sanitizeForAi(result.testo());
             log.info("[Scraper] Testo tecnico trovato da 'auto-data.net' ({} chars)", sanitized.length());
-            return result.withTesto(sanitized);
+            // Ricostruisce il record conservando tutti i metadati (anno, fallback)
+            return new ScraperResult(sanitized, result.annoRichiesto(), result.annoEffettivo(), result.annoFallback());
         }
 
         log.warn("[Scraper] auto-data.net non ha trovato dati per: {} {} {}", marca, modello, motore);
