@@ -13,17 +13,15 @@ import dev.langchain4j.service.V;
  * testi troppo corti) questo service chiede direttamente a Gemini di usare
  * il suo training set per fornire i dati tecnici ufficiali.
  *
- * NOTA SUI TIPI DEI PARAMETRI @V:
- * LangChain4j non sostituisce correttamente i primitivi (int, double)
- * nelle template variables del @UserMessage. Il parametro rimane
- * la stringa letterale '{nomeVariabile}' invece del valore reale.
- * TUTTI i parametri @V devono essere String. La conversione avviene nel chiamante
- * (es. String.valueOf(anno) in AutoExtractionOrchestrator).
+ * NOTE SINTASSI LANGCHAIN4J:
+ * - Template variables: DOPPIE graffe {{nomeVar}} — sintassi Mustache.
+ *   Singola graffa {var} NON viene sostituita → Gemini riceve la stringa letterale.
+ * - Parametri @V: devono essere String. I primitivi (int, double) non vengono
+ *   interpolati correttamente — convertire con String.valueOf() nel chiamante.
  *
  * I record salvati tramite questo provider hanno:
  * - confermato_manualmente = false
  * - fonte_dati = "ai-direct:marca:modello:anno"
- * per permettere revisione e correzione successiva.
  */
 public interface AiDirectDataProvider {
 
@@ -49,10 +47,10 @@ public interface AiDirectDataProvider {
     @UserMessage("""
         Fornisci la scheda tecnica completa per il seguente veicolo:
         
-        Marca: {marca}
-        Modello: {modello}
-        Motorizzazione: {motore}
-        Anno: {anno}
+        Marca: {{marca}}
+        Modello: {{modello}}
+        Motorizzazione: {{motore}}
+        Anno: {{anno}}
         
         Popola tutti i campi che conosci con certezza.
         Imposta null per i campi che non conosci o di cui non sei sicuro.
