@@ -11,20 +11,18 @@ import dev.langchain4j.service.V;
  * PATTERN: Information Extractor (RAG-light)
  * ============================================
  * 1. Il WebScraperService recupera il testo grezzo (HTML pulito) da auto-data.net.
- * 2. Il testo viene passato a Gemini insieme a un contesto veicolo iniettato come
- *    stringhe letterali (NON come placeholder) per evitare che Gemini le riporti
- *    verbatim nel JSON output.
+ * 2. Il testo viene passato a Gemini insieme al contesto veicolo.
  * 3. LangChain4j costruisce il JSON Schema da CarDataDTO e lo invia a Gemini.
  * 4. Gemini risponde con un JSON strutturato.
  * 5. LangChain4j deserializza il JSON in un CarDataDTO fortemente tipizzato.
  * 6. L'orchestratore sovrascrive SEMPRE i campi identitari (marca, modello,
- *    nomeMotore, annoProduzione) con i valori noti dal frontend: questo e'
- *    la difesa principale contro i placeholder letterali.
+ *    nomeMotore, annoProduzione) con i valori noti dal frontend.
  *
- * NOTA ARCHITETTURALE:
- * I campi marca/modello/nomeMotore/annoProduzione vengono forniti nel prompt
- * come contesto ausiliario, ma la sorgente di verita' sono i parametri
- * passati dal frontend. L'orchestratore fa sempre l'override post-AI.
+ * NOTA CRITICA SUI PLACEHOLDER LANGCHAIN4J:
+ * In @UserMessage i placeholder per @V usano la sintassi {{nomeVar}} con DOPPIE
+ * graffe. La singola graffa {nomeVar} NON viene sostituita e viene passata
+ * verbatim a Gemini, che la restitutisce cosi' com'e' nel JSON output.
+ * Riferimento: https://docs.langchain4j.dev/tutorials/ai-services#parameter-passing
  */
 public interface AiCarDataExtractor {
 
@@ -45,21 +43,21 @@ public interface AiCarDataExtractor {
         8. Prezzi in euro come numero decimale senza simboli (es. 32500.0).
         9. Restituisci SOLO il JSON strutturato, nessun testo aggiuntivo.
         10. Per i campi marca, modello, nomeMotore e annoProduzione: copia
-            esattamente i valori indicati nel CONTESTO VEICOLO qui sotto.
+            esattamente i valori indicati nel CONTESTO VEICOLO.
         """)
     @UserMessage("""
         CONTESTO VEICOLO (copia questi valori esatti nei campi corrispondenti del JSON):
-        marca = "{marcaInput}"
-        modello = "{modelloInput}"
-        nomeMotore = "{motoreInput}"
-        annoProduzione = {annoInput}
+        marca = "{{marcaInput}}"
+        modello = "{{modelloInput}}"
+        nomeMotore = "{{motoreInput}}"
+        annoProduzione = {{annoInput}}
 
         Estrai dal TESTO GREZZO qui sotto tutti i dati tecnici disponibili
         (consumi, potenza kW/CV, cilindrata, pneumatici, cambio, carburante, ecc.).
         Imposta null per i campi non trovati nel testo. Non inventare nulla.
 
         TESTO GREZZO:
-        {rawText}
+        {{rawText}}
         """)
     CarDataDTO extractCarData(
             @V("marcaInput")   String marca,

@@ -13,21 +13,13 @@ import dev.langchain4j.service.V;
  * testi troppo corti) questo service chiede direttamente a Gemini di usare
  * il suo training set per fornire i dati tecnici ufficiali.
  *
- * STRATEGIA PROMPT:
- * - Dati ufficiali scheda tecnica (kw, consumi, cilindrata, pneumatici):
- *   Gemini usa esclusivamente dati omologati. null se non li conosce.
- * - Dati di mercato (costi tagliando, gruppo assicurativo):
- *   Questi dati NON esistono nelle schede ufficiali. Gemini usa stime
- *   tipiche di mercato italiano basate su marca/segmento/cilindrata.
- *   Sono approssimazioni ragionevoli, non dati certificati.
- *
  * NOTA SUI TIPI DEI PARAMETRI @V:
  * LangChain4j non sostituisce i primitivi (int). Tutti i @V devono essere String.
  * La conversione avviene nel chiamante con String.valueOf(anno).
  *
- * I record salvati tramite questo provider hanno:
- * - confermato_manualmente = false
- * - fonte_dati = "ai-direct:marca:modello:anno"
+ * NOTA CRITICA SUI PLACEHOLDER LANGCHAIN4J:
+ * In @UserMessage i placeholder per @V usano la sintassi {{nomeVar}} con DOPPIE
+ * graffe. La singola graffa {nomeVar} NON viene sostituita.
  */
 public interface AiDirectDataProvider {
 

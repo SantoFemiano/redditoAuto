@@ -23,6 +23,8 @@ import java.util.regex.Pattern;
  *
  * Livello 2: /it/volkswagen-brand-80
  *   -> link: <a class="modeli" href="/it/volkswagen-passat-model-902">  (contiene -model-)
+ *   NOTA: alcune pagine marca usano solo <a href="...-model-..."> senza class="modeli".
+ *   Il selettore usa prima a.modeli, poi fallback su tutti i link -model-.
  *
  * Livello 3: /it/volkswagen-passat-model-902
  *   -> link: <a href="/it/volkswagen-passat-b8-facelift-2019-generation-7177">
@@ -58,14 +60,12 @@ public class AutoDataNetScraper {
     private static final Pattern POWER_PATTERN   = Pattern.compile("(\\d{2,4})\\s*(?:cv|hp|kw)", Pattern.CASE_INSENSITIVE);
     private static final Pattern DISPLACEMENT_PATTERN = Pattern.compile("(\\d\\.\\d)");
 
-    // Tipi carburante/motorizzazione riconoscibili nell'URL auto-data.net
     private static final List<String> FUEL_TOKENS = List.of(
         "tdi", "tsi", "tfsi", "gdi", "crdi", "cdti", "jtd", "hdi",
         "gte", "phev", "hybrid", "ibrido", "elettrico", "electric",
         "mpi", "fsi", "gpl", "cng", "etg", "tce", "puretech"
     );
 
-    // Tipi cambio riconoscibili
     private static final List<String> GEARBOX_TOKENS = List.of(
         "dsg", "dct", "cvt", "automatic", "automatico", "manual", "manuale",
         "pdk", "edct", "xdrive", "quattro"
@@ -155,19 +155,21 @@ public class AutoDataNetScraper {
 
     // ═══════════════════════════════════════════════
     //  LIVELLO 2 - MODELLO
+    //  Prima tenta il selettore class="modeli", poi
+    //  fallback su tutti i link che contengono -model-
     // ═══════════════════════════════════════════════
 
     private String findModelUrl(String brandUrl, String modello) throws IOException {
         Document doc = fetch(brandUrl);
         String ml = normalize(modello);
 
-        List<LinkEntry> candidates = new ArrayList<>();
-        for (Element a : doc.select("a.modeli[href]")) {
-            String href = absoluteHref(a);
-            if (href.isEmpty() || !href.contains("-model-")) continue;
-            Element strong = a.selectFirst("strong");
-            String name = normalize(strong != null ? strong.text() : a.text());
-            if (!name.isEmpty()) candidates.add(new LinkEntry(name, href));
+        // Tentativo 1: selettore preciso class="modeli"
+        List<LinkEntry> candidates = extractModelCandidates(doc.select("a.modeli[href]"));
+
+        // Fallback: qualsiasi link che contenga -model- nell'href
+        if (candidates.isEmpty()) {
+            log.debug("[AutoDataNet] Fallback selettore modello: uso tutti i link -model-");
+            candidates = extractModelCandidates(doc.select("a[href*=-model-]"));
         }
 
         log.debug("[AutoDataNet] Modelli trovati: {} | es: {}",
@@ -177,6 +179,21 @@ public class AutoDataNetScraper {
         return bestMatch(ml, candidates);
     }
 
+    private List<LinkEntry> extractModelCandidates(Elements links) {
+        List<LinkEntry> candidates = new ArrayList<>();
+        for (Element a : links) {
+            String href = absoluteHref(a);
+            if (href.isEmpty() || !href.contains("-model-")) continue;
+            Element strong = a.selectFirst("strong");
+            String name = normalize(strong != null ? strong.text() : a.text());
+            if (!name.isEmpty()) candidates.add(new LinkEntry(name, href));
+        }
+        // Deduplicazione per href
+        Map<String, LinkEntry> dedup = new LinkedHashMap<>();
+        for (LinkEntry e : candidates) dedup.put(e.url(), e);
+        return new ArrayList<>(dedup.values());
+    }
+
     // ═══════════════════════════════════════════════
     //  LIVELLO 3 - GENERAZIONE
     // ═══════════════════════════════════════════════
@@ -184,7 +201,7 @@ public class AutoDataNetScraper {
     private String findGenerazioneUrl(String modelUrl, int anno) throws IOException {
         Document doc = fetch(modelUrl);
 
-        String bestUrl  = null;
+        String bestUrl   = null;
         int    bestScore = Integer.MIN_VALUE;
         String fallback  = null;
 
@@ -227,18 +244,17 @@ public class AutoDataNetScraper {
     }
 
     // ═══════════════════════════════════════════════
-    //  LIVELLO 4 - MOTORIZZAZIONE  (scoring migliorato)
+    //  LIVELLO 4 - MOTORIZZAZIONE  (scoring pesato)
     // ═══════════════════════════════════════════════
 
     private String findMotorizzazioneUrl(String genUrl, String motore) throws IOException {
         Document doc = fetch(genUrl);
         String ml = normalize(motore);
 
-        // Estrai tokens significativi dal motore richiesto
-        int    requestedPower        = extractPower(ml);          // es. 150 (da "150cv" o "150hp")
-        String requestedDisplacement = extractDisplacement(ml);   // es. "2.0"
-        List<String> requestedFuel   = matchingTokens(ml, FUEL_TOKENS);     // es. ["tdi"]
-        List<String> requestedGearbox= matchingTokens(ml, GEARBOX_TOKENS);  // es. ["dsg"]
+        int    requestedPower        = extractPower(ml);
+        String requestedDisplacement = extractDisplacement(ml);
+        List<String> requestedFuel   = matchingTokens(ml, FUEL_TOKENS);
+        List<String> requestedGearbox= matchingTokens(ml, GEARBOX_TOKENS);
 
         log.debug("[AutoDataNet] Matching motore '{}': potenza={} displacement={} fuel={} gearbox={}",
             ml, requestedPower, requestedDisplacement, requestedFuel, requestedGearbox);
@@ -260,7 +276,6 @@ public class AutoDataNetScraper {
             if (!name.isEmpty()) candidates.add(new LinkEntry(name, href));
         }
 
-        // Deduplicazione per href
         Map<String, LinkEntry> dedup = new LinkedHashMap<>();
         for (LinkEntry e : candidates) dedup.put(e.url(), e);
         candidates = new ArrayList<>(dedup.values());
@@ -271,13 +286,6 @@ public class AutoDataNetScraper {
 
         if (candidates.isEmpty()) return null;
 
-        // ── SCORING PESATO ──────────────────────────────────────────────
-        // Pesi:
-        //   +3  match potenza numerica (150cv == 150hp nell'URL)
-        //   +2  match tipo carburante/motorizzazione (tdi, tsi, ecc.)
-        //   +1  match displacement (2.0, 1.6, ecc.)
-        //   +1  match tipo cambio (dsg, cvt, ecc.)
-        // ────────────────────────────────────────────────────────────────
         String bestUrl   = null;
         int    bestScore = -1;
 
@@ -285,7 +293,6 @@ public class AutoDataNetScraper {
             String urlLower = c.url().toLowerCase();
             int score = 0;
 
-            // +3 potenza: l'URL contiene il numero HP che coincide con CV richiesto
             if (requestedPower > 0) {
                 String powerToken = requestedPower + "hp";
                 if (urlLower.contains(powerToken) || c.name().contains(String.valueOf(requestedPower))) {
@@ -293,19 +300,16 @@ public class AutoDataNetScraper {
                 }
             }
 
-            // +2 tipo carburante
             for (String ft : requestedFuel) {
                 if (urlLower.contains(ft) || c.name().contains(ft)) { score += 2; break; }
             }
 
-            // +1 displacement
             if (requestedDisplacement != null) {
                 if (urlLower.contains(requestedDisplacement) || c.name().contains(requestedDisplacement)) {
                     score += 1;
                 }
             }
 
-            // +1 cambio
             for (String gt : requestedGearbox) {
                 if (urlLower.contains(gt) || c.name().contains(gt)) { score += 1; break; }
             }
@@ -360,23 +364,14 @@ public class AutoDataNetScraper {
     //  UTILITY MATCHING
     // ═══════════════════════════════════════════════
 
-    /**
-     * Estrae il numero di potenza da una stringa motore.
-     * Esempi: "2.0 TDI 150CV DSG" -> 150
-     *         "110kw" -> 110
-     *         "200hp" -> 200
-     * Se non trovato, ritorna 0.
-     */
     private int extractPower(String motore) {
         Matcher m = POWER_PATTERN.matcher(motore);
         while (m.find()) {
             try {
                 int val = Integer.parseInt(m.group(1));
-                // Filtra: potenza auto realistica tra 40 e 700
                 if (val >= 40 && val <= 700) return val;
             } catch (NumberFormatException ignored) {}
         }
-        // Fallback: cerca qualsiasi numero isolato tra 40 e 700
         Matcher fallback = Pattern.compile("(?<![.\\d])(\\d{2,3})(?![.\\d])").matcher(motore);
         while (fallback.find()) {
             try {
@@ -387,18 +382,11 @@ public class AutoDataNetScraper {
         return 0;
     }
 
-    /**
-     * Estrae il displacement (cilindrata in litri) da una stringa motore.
-     * Esempi: "2.0 TDI" -> "2.0", "1.6 MPI" -> "1.6"
-     */
     private String extractDisplacement(String motore) {
         Matcher m = DISPLACEMENT_PATTERN.matcher(motore);
         return m.find() ? m.group(1) : null;
     }
 
-    /**
-     * Trova quali token della lista sono presenti nella stringa motore.
-     */
     private List<String> matchingTokens(String motore, List<String> tokens) {
         List<String> found = new ArrayList<>();
         for (String t : tokens) {
@@ -407,7 +395,6 @@ public class AutoDataNetScraper {
         return found;
     }
 
-    /** Matching generico: esatto -> parziale -> score per parole */
     private String bestMatch(String target, List<LinkEntry> candidates) {
         if (candidates.isEmpty()) return null;
         for (LinkEntry c : candidates) if (c.name().equals(target)) return c.url();
