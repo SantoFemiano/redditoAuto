@@ -9,37 +9,41 @@ import org.springframework.stereotype.Component;
 
 import java.io.IOException;
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Scraper dedicato a auto-data.net con navigazione a cascata 4 livelli.
+ * Scraper per auto-data.net - struttura URL verificata con curl:
  *
- * STRUTTURA URL reale auto-data.net:
- *   /it/allbrands
- *      link formato: /it/volkswagen-brand-80
- *   /it/volkswagen-brand-80
- *      link formato: /it/volkswagen-passat-models-227
- *   /it/volkswagen-passat-models-227
- *      link formato: /it/volkswagen-passat-b8-facelift-2019-47526  (no '-models-', no '-brand-')
- *   /it/volkswagen-passat-b8-facelift-2019-47526
- *      link formato: /it/volkswagen-passat-b8-2.0-tdi-150hp-...-48000
- *   /it/volkswagen-passat-b8-2.0-tdi-150hp-...-48000
- *      -> scheda tecnica con tabelle kv
+ * Livello 1: /it/allbrands
+ *   -> link formato: /it/volkswagen-brand-80   (contiene -brand-)
+ *
+ * Livello 2: /it/volkswagen-brand-80
+ *   -> link: <a class="modeli" href="/it/volkswagen-passat-model-902">  (contiene -model-)
+ *
+ * Livello 3: /it/volkswagen-passat-model-902
+ *   -> link: <a href="/it/volkswagen-passat-b8-facelift-2019-generation-7177">
+ *      anni estratti da: <strong class="end">2019 - 2021</strong>
+ *                        <strong class="cur">2023 - </strong>
+ *
+ * Livello 4: /it/volkswagen-passat-b8-facelift-2019-generation-7177
+ *   -> link: <a href="/it/volkswagen-passat-b8-facelift-2019-2.0-tdi-150hp-dsg-39222">
+ *      (non contengono -generation-, -model-, -brand-; terminano con -NUMERO)
+ *
+ * Livello 5: /it/volkswagen-passat-b8-facelift-2019-2.0-tdi-150hp-dsg-39222
+ *   -> tabella HTML con dati tecnici
  */
 @Component
 @Slf4j
 public class AutoDataNetScraper {
 
-    private static final String BASE   = "https://www.auto-data.net";
-    private static final String BASE_IT = BASE + "/it";
-    private static final Pattern ID_SUFFIX = Pattern.compile("-\\d+$");
+    private static final String BASE_IT = "https://www.auto-data.net/it";
+    private static final Pattern ENDS_WITH_NUMBER = Pattern.compile("-\\d+$");
+    private static final Pattern YEAR_PATTERN = Pattern.compile("(20|19)\\d{2}");
 
-    @Value("${scraper.timeout-ms:8000}")
+    @Value("${scraper.timeout-ms:10000}")
     private int timeoutMs;
 
     @Value("${scraper.user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36}")
@@ -49,193 +53,221 @@ public class AutoDataNetScraper {
     private volatile Instant brandCacheTime = Instant.EPOCH;
     private static final long CACHE_TTL_SECONDS = 86400;
 
-    // -----------------------------------------------
-    // ENTRY POINT
-    // -----------------------------------------------
+    // ═══════════════════════════════════════════════
+    //  ENTRY POINT
+    // ═══════════════════════════════════════════════
 
     public Optional<String> scrape(String marca, String modello, String motore, int anno) {
         log.info("[AutoDataNet] Navigazione: {} {} {} {}", marca, modello, motore, anno);
         try {
+            // 1. Trova URL marca
             String brandUrl = findBrandUrl(marca);
-            if (brandUrl == null) { log.warn("[AutoDataNet] Marca non trovata: {}", marca); return Optional.empty(); }
-            log.debug("[AutoDataNet] Marca: {}", brandUrl);
+            if (brandUrl == null) {
+                log.warn("[AutoDataNet] Marca non trovata: {}", marca);
+                return Optional.empty();
+            }
+            log.debug("[AutoDataNet] Livello 1 - Marca: {}", brandUrl);
 
+            // 2. Trova URL modello
             String modelUrl = findModelUrl(brandUrl, modello);
-            if (modelUrl == null) { log.warn("[AutoDataNet] Modello non trovato: {}", modello); return Optional.empty(); }
-            log.debug("[AutoDataNet] Modello: {}", modelUrl);
+            if (modelUrl == null) {
+                log.warn("[AutoDataNet] Modello non trovato: {} su {}", modello, brandUrl);
+                return Optional.empty();
+            }
+            log.debug("[AutoDataNet] Livello 2 - Modello: {}", modelUrl);
 
+            // 3. Trova URL generazione (per anno)
             String genUrl = findGenerazioneUrl(modelUrl, anno);
-            if (genUrl == null) { log.warn("[AutoDataNet] Generazione non trovata per anno {}", anno); return Optional.empty(); }
-            log.debug("[AutoDataNet] Generazione: {}", genUrl);
+            if (genUrl == null) {
+                log.warn("[AutoDataNet] Generazione non trovata per anno {} su {}", anno, modelUrl);
+                return Optional.empty();
+            }
+            log.debug("[AutoDataNet] Livello 3 - Generazione: {}", genUrl);
 
+            // 4. Trova URL motorizzazione
             String motorUrl = findMotorizzazioneUrl(genUrl, motore);
-            if (motorUrl == null) { log.warn("[AutoDataNet] Motorizzazione non trovata: {}", motore); return Optional.empty(); }
-            log.debug("[AutoDataNet] Motorizzazione: {}", motorUrl);
+            if (motorUrl == null) {
+                log.warn("[AutoDataNet] Motorizzazione non trovata: {} su {}", motore, genUrl);
+                return Optional.empty();
+            }
+            log.debug("[AutoDataNet] Livello 4 - Motorizzazione: {}", motorUrl);
 
+            // 5. Scarica e restituisce la scheda tecnica
             return fetchSchedaTecnica(motorUrl);
 
         } catch (Exception e) {
-            log.warn("[AutoDataNet] Errore: {}", e.getMessage());
+            log.warn("[AutoDataNet] Errore durante la navigazione: {}", e.getMessage());
             return Optional.empty();
         }
     }
 
-    // -----------------------------------------------
-    // LIVELLO 1 - MARCA
-    // -----------------------------------------------
+    // ═══════════════════════════════════════════════
+    //  LIVELLO 1 - MARCA  (cache 24h)
+    // ═══════════════════════════════════════════════
 
     private String findBrandUrl(String marca) throws IOException {
         refreshBrandCacheIfNeeded();
-        String ml = marca.toLowerCase().trim();
+        String ml = normalize(marca);
+        // Match esatto
         if (brandCache.containsKey(ml)) return brandCache.get(ml);
+        // Match parziale (es. "mercedes" trova "mercedes-benz")
         return brandCache.entrySet().stream()
-            .filter(e -> e.getKey().contains(ml) || ml.contains(e.getKey()))
-            .map(Map.Entry::getValue)
-            .findFirst().orElse(null);
+                .filter(e -> e.getKey().contains(ml) || ml.contains(e.getKey()))
+                .map(Map.Entry::getValue)
+                .findFirst().orElse(null);
     }
 
     private void refreshBrandCacheIfNeeded() throws IOException {
         long elapsed = Instant.now().getEpochSecond() - brandCacheTime.getEpochSecond();
         if (elapsed < CACHE_TTL_SECONDS && !brandCache.isEmpty()) return;
 
-        log.debug("[AutoDataNet] Refresh cache marche");
-        Document doc = get(BASE_IT + "/allbrands");
+        log.debug("[AutoDataNet] Refresh cache marche da /allbrands");
+        Document doc = fetch(BASE_IT + "/allbrands");
 
-        for (Element a : doc.select("a[href]")) {
-            String href = a.absUrl("href");
-            if (!href.contains("-brand-")) continue;
-            String name = a.text().toLowerCase().trim();
-            if (!name.isBlank()) brandCache.put(name, href);
+        // I link marca hanno href che contiene -brand-
+        for (Element a : doc.select("a[href*=-brand-]")) {
+            String href = absoluteHref(a);
+            String name = normalize(a.text());
+            if (!href.isEmpty() && !name.isEmpty()) {
+                brandCache.put(name, href);
+            }
         }
         brandCacheTime = Instant.now();
         log.debug("[AutoDataNet] Cache marche: {} voci", brandCache.size());
     }
 
-    // -----------------------------------------------
-    // LIVELLO 2 - MODELLO
-    // -----------------------------------------------
+    // ═══════════════════════════════════════════════
+    //  LIVELLO 2 - MODELLO
+    //  Selettore: a.modeli  (classe CSS verificata con curl)
+    // ═══════════════════════════════════════════════
 
     private String findModelUrl(String brandUrl, String modello) throws IOException {
-        Document doc = get(brandUrl);
-        String ml = modello.toLowerCase().trim();
+        Document doc = fetch(brandUrl);
+        String ml = normalize(modello);
 
         List<LinkEntry> candidates = new ArrayList<>();
-        for (Element a : doc.select("a[href]")) {
-            String href = a.absUrl("href");
-            // I link modello contengono -models- nell'href
-            if (!href.contains("-models-")) continue;
-            String name = a.text().toLowerCase().trim();
-            if (!name.isBlank()) {
-                candidates.add(new LinkEntry(name, href));
-            } else {
-                // Fallback: estrai nome dal path URL
-                String path = href.replaceAll(".*/it/", "").replaceAll("-models-.*", "");
-                // rimuove il prefisso marca (es. "volkswagen-")
-                path = path.replaceFirst("^[a-z]+-", "");
-                candidates.add(new LinkEntry(path.replace("-", " "), href));
-            }
+        // I link modello usano classe CSS "modeli" e href contiene -model-
+        for (Element a : doc.select("a.modeli[href]")) {
+            String href = absoluteHref(a);
+            if (href.isEmpty() || !href.contains("-model-")) continue;
+            // Il nome del modello e' nel tag <strong> dentro il link
+            Element strong = a.selectFirst("strong");
+            String name = normalize(strong != null ? strong.text() : a.text());
+            if (!name.isEmpty()) candidates.add(new LinkEntry(name, href));
         }
 
-        if (candidates.isEmpty()) {
-            // Se Jsoup non ha trovato testo nei link, prova a leggere il raw HTML
-            log.debug("[AutoDataNet] Nessun link -models- trovato con testo, provo raw href");
-            for (Element a : doc.select("a[href*=-models-]")) {
-                String href = a.absUrl("href");
-                String path = href.replaceAll(".*/it/", "")
-                                  .replaceAll("-models-.*", "")
-                                  .replaceFirst("^[a-z]+-", "")
-                                  .replace("-", " ");
-                candidates.add(new LinkEntry(path, href));
-            }
-        }
-
-        log.debug("[AutoDataNet] Modelli trovati: {} (es: {})",
-            candidates.size(),
-            candidates.isEmpty() ? "nessuno" : candidates.get(0).name() + " -> " + candidates.get(0).url());
+        log.debug("[AutoDataNet] Modelli trovati: {} | es: {}",
+                candidates.size(),
+                candidates.isEmpty() ? "nessuno" : candidates.get(0).name() + " -> " + candidates.get(0).url());
 
         return bestMatch(ml, candidates);
     }
 
-    // -----------------------------------------------
-    // LIVELLO 3 - GENERAZIONE
-    // -----------------------------------------------
+    // ═══════════════════════════════════════════════
+    //  LIVELLO 3 - GENERAZIONE
+    //  Selettore: a[href*=-generation-]
+    //  Anni: strong.end ("2019 - 2021") o strong.cur ("2023 - ")
+    // ═══════════════════════════════════════════════
 
     private String findGenerazioneUrl(String modelUrl, int anno) throws IOException {
-        Document doc = get(modelUrl);
+        Document doc = fetch(modelUrl);
 
-        String best = null;
-        int bestDist = Integer.MAX_VALUE;
+        String bestUrl = null;
+        int bestScore = Integer.MIN_VALUE;
         String fallback = null;
 
-        for (Element a : doc.select("a[href]")) {
-            String href = a.absUrl("href");
-            // Link generazione: contiene /it/, non e' brand ne' models, ha ID numerico in fondo
-            if (!href.startsWith(BASE_IT + "/")) continue;
-            if (href.contains("-brand-") || href.contains("-models-")) continue;
-            if (!ID_SUFFIX.matcher(href).find()) continue;
-
+        for (Element a : doc.select("a[href*=-generation-]")) {
+            String href = absoluteHref(a);
+            if (href.isEmpty()) continue;
             if (fallback == null) fallback = href;
 
-            // Cerca anni nel testo del link o nell'elemento circostante
-            Element ctx = a.closest("tr,li,div,td");
-            String text = (a.text() + " " + (ctx != null ? ctx.text() : "")).toLowerCase();
+            // Cerca anni nel contesto del link (elemento contenitore)
+            Element container = a.closest("div");
+            String ctx = container != null ? container.text() : a.text();
 
-            int[] range = extractYearRange(text);
+            int[] range = extractYearRange(ctx);
             if (range == null) continue;
 
-            int from = range[0], to = range[1];
+            int from = range[0];
+            int to   = range[1]; // 9999 se ancora in produzione
+
             if (anno >= from && anno <= to) {
-                int dist = anno - from;
-                if (dist < bestDist) { bestDist = dist; best = href; }
+                // Score: più recente = meglio (per evitare generazioni vecchie)
+                int score = from;
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestUrl = href;
+                }
             }
         }
 
-        if (best == null && fallback != null) {
-            log.debug("[AutoDataNet] Generazione: nessun match anno, uso fallback {}", fallback);
+        if (bestUrl == null && fallback != null) {
+            log.debug("[AutoDataNet] Generazione: nessun match per anno {}, uso prima disponibile: {}", anno, fallback);
             return fallback;
         }
-        return best;
+        return bestUrl;
     }
 
+    /**
+     * Estrae range di anni da una stringa tipo:
+     *   "Volkswagen Passat (B8, facelift 2019) 2019 - 2021"
+     *   "Volkswagen Passat (B9) 2023 - "
+     */
     private int[] extractYearRange(String text) {
         List<Integer> years = new ArrayList<>();
-        java.util.regex.Matcher m = Pattern.compile("(19|20)\\d{2}").matcher(text);
+        Matcher m = YEAR_PATTERN.matcher(text);
         while (m.find()) years.add(Integer.parseInt(m.group()));
         if (years.isEmpty()) return null;
+        Collections.sort(years);
         int from = years.get(0);
         int to   = years.size() > 1 ? years.get(years.size() - 1) : 9999;
         return new int[]{from, to};
     }
 
-    // -----------------------------------------------
-    // LIVELLO 4 - MOTORIZZAZIONE
-    // -----------------------------------------------
+    // ═══════════════════════════════════════════════
+    //  LIVELLO 4 - MOTORIZZAZIONE
+    //  I link motorizzazione: non contengono -generation-, -model-, -brand-
+    //  e terminano con un numero ID (es. -39222)
+    // ═══════════════════════════════════════════════
 
     private String findMotorizzazioneUrl(String genUrl, String motore) throws IOException {
-        Document doc = get(genUrl);
-        String ml = motore.toLowerCase();
+        Document doc = fetch(genUrl);
+        String ml = normalize(motore);
         String[] parts = ml.split("[^a-z0-9.]+");
 
         List<LinkEntry> candidates = new ArrayList<>();
         for (Element a : doc.select("a[href]")) {
-            String href = a.absUrl("href");
-            if (!href.startsWith(BASE_IT + "/")) continue;
-            if (href.contains("-brand-") || href.contains("-models-")) continue;
+            String href = absoluteHref(a);
+            if (href.isEmpty()) continue;
+            if (!href.startsWith("https://www.auto-data.net/it/")) continue;
+            // Esclude link di navigazione (generation, model, brand, pagine sistema)
+            if (href.contains("-generation-") || href.contains("-model-") ||
+                href.contains("-brand-")       || href.endsWith("/it/") ||
+                href.contains("/login")         || href.contains("/search") ||
+                href.contains("/register")      || href.contains("/allbrands")) continue;
+            // Deve terminare con -NUMERO
+            if (!ENDS_WITH_NUMBER.matcher(href).find()) continue;
+            // Evita duplicati
             if (href.equals(genUrl)) continue;
-            if (!ID_SUFFIX.matcher(href).find()) continue;
-            String name = a.text().toLowerCase().trim();
-            if (name.isBlank()) {
-                name = href.replaceAll(".*/it/", "").replaceAll("-\\d+$", "").replace("-", " ");
-            }
-            candidates.add(new LinkEntry(name, href));
+
+            // Nome: da <strong class="tit"> oppure testo del link
+            Element tit = a.selectFirst(".tit");
+            String name = normalize(tit != null ? tit.text() : a.text());
+            if (!name.isEmpty()) candidates.add(new LinkEntry(name, href));
         }
 
-        log.debug("[AutoDataNet] Motorizzazioni trovate: {} (es: {})",
-            candidates.size(),
-            candidates.isEmpty() ? "nessuna" : candidates.get(0).name() + " -> " + candidates.get(0).url());
+        // Deduplicazione per href
+        Map<String, LinkEntry> dedup = new LinkedHashMap<>();
+        for (LinkEntry e : candidates) dedup.put(e.url(), e);
+        candidates = new ArrayList<>(dedup.values());
+
+        log.debug("[AutoDataNet] Motorizzazioni trovate: {} | es: {}",
+                candidates.size(),
+                candidates.isEmpty() ? "nessuna" : candidates.get(0).name() + " -> " + candidates.get(0).url());
 
         if (candidates.isEmpty()) return null;
 
+        // Score per keyword del motore (tdi, 150, 2.0, dsg, ecc.)
         String bestUrl = null;
         int bestScore = -1;
         for (LinkEntry c : candidates) {
@@ -248,45 +280,51 @@ public class AutoDataNetScraper {
         return bestUrl != null ? bestUrl : candidates.get(0).url();
     }
 
-    // -----------------------------------------------
-    // SCHEDA TECNICA
-    // -----------------------------------------------
+    // ═══════════════════════════════════════════════
+    //  LIVELLO 5 - SCHEDA TECNICA
+    // ═══════════════════════════════════════════════
 
     private Optional<String> fetchSchedaTecnica(String url) throws IOException {
-        log.info("[AutoDataNet] Scarico scheda: {}", url);
-        Document doc = get(url);
-        doc.select("nav,header,footer,script,style,iframe,.ads,.cookie").remove();
+        log.info("[AutoDataNet] Scarico scheda tecnica: {}", url);
+        Document doc = fetch(url);
+
+        // Rimuove elementi non utili
+        doc.select("nav, header, footer, script, style, iframe, .ad970, .ad970_250, .ads").remove();
 
         StringBuilder sb = new StringBuilder();
         sb.append("[FONTE: ").append(url).append("]\n");
         sb.append(doc.title()).append("\n\n");
 
+        // Parsing tabelle dati tecnici (struttura: <td> label | <td> valore)
         for (Element table : doc.select("table")) {
             for (Element row : table.select("tr")) {
-                var cells = row.select("td,th");
+                Elements cells = row.select("td, th");
                 if (cells.size() >= 2) {
-                    sb.append(cells.get(0).text().trim())
-                      .append(": ")
-                      .append(cells.get(1).text().trim())
-                      .append("\n");
+                    String label = cells.get(0).text().trim();
+                    String value = cells.get(1).text().trim();
+                    if (!label.isEmpty() && !value.isEmpty()) {
+                        sb.append(label).append(": ").append(value).append("\n");
+                    }
                 }
             }
             sb.append("\n");
         }
 
-        if (sb.length() < 300) {
+        // Fallback: testo body se tabelle vuote
+        if (sb.length() < 400) {
             Element body = doc.body();
             if (body != null) sb.append(body.text());
         }
 
-        log.debug("[AutoDataNet] Scheda: {} chars", sb.length());
-        return sb.length() > 100 ? Optional.of(sb.toString()) : Optional.empty();
+        log.info("[AutoDataNet] Scheda estratta: {} chars da {}", sb.length(), url);
+        return sb.length() > 200 ? Optional.of(sb.toString()) : Optional.empty();
     }
 
-    // -----------------------------------------------
-    // UTILITY
-    // -----------------------------------------------
+    // ═══════════════════════════════════════════════
+    //  UTILITY
+    // ═══════════════════════════════════════════════
 
+    /** Matching: esatto -> parziale -> score per parole */
     private String bestMatch(String target, List<LinkEntry> candidates) {
         if (candidates.isEmpty()) return null;
         for (LinkEntry c : candidates) if (c.name().equals(target)) return c.url();
@@ -301,15 +339,29 @@ public class AutoDataNetScraper {
         return best != null ? best : candidates.get(0).url();
     }
 
-    private Document get(String url) throws IOException {
+    private String absoluteHref(Element a) {
+        String href = a.attr("href");
+        if (href == null || href.isBlank()) return "";
+        if (href.startsWith("http")) return href;
+        if (href.startsWith("/")) return "https://www.auto-data.net" + href;
+        return "";
+    }
+
+    private String normalize(String s) {
+        return s == null ? "" : s.toLowerCase().trim();
+    }
+
+    private Document fetch(String url) throws IOException {
         return Jsoup.connect(url)
-            .userAgent(userAgent)
-            .timeout(timeoutMs)
-            .ignoreHttpErrors(true)
-            .followRedirects(true)
-            .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-            .header("Accept-Language", "it-IT,it;q=0.9,en;q=0.8")
-            .get();
+                .userAgent(userAgent)
+                .timeout(timeoutMs)
+                .ignoreHttpErrors(true)
+                .followRedirects(true)
+                .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+                .header("Accept-Language", "it-IT,it;q=0.9,en;q=0.8")
+                .header("Accept-Encoding", "gzip, deflate")
+                .referrer("https://www.auto-data.net/it/allbrands")
+                .get();
     }
 
     private record LinkEntry(String name, String url) {}
