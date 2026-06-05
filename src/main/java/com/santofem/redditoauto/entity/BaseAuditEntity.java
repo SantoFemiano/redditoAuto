@@ -4,7 +4,6 @@ import jakarta.persistence.Column;
 import jakarta.persistence.EntityListeners;
 import jakarta.persistence.MappedSuperclass;
 import lombok.Getter;
-import lombok.Setter;
 import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.annotation.LastModifiedDate;
 import org.springframework.data.jpa.domain.support.AuditingEntityListener;
@@ -12,22 +11,22 @@ import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 import java.time.LocalDateTime;
 
 /**
- * Classe base per l'audit trail automatico JPA.
- * Tutte le entity che la estendono ricevono createdAt e updatedAt
- * popolati automaticamente da Spring Data JPA Auditing.
- * Abilitato da @EnableJpaAuditing in RedditoAutoApplication.
+ * Classe base per tutte le entità JPA.
+ * Popola automaticamente createdAt e updatedAt tramite
+ * Spring Data JPA Auditing — nessun codice manuale necessario.
+ *
+ * Attivato da @EnableJpaAuditing in JpaAuditingConfig.
  */
 @Getter
-@Setter
 @MappedSuperclass
 @EntityListeners(AuditingEntityListener.class)
 public abstract class BaseAuditEntity {
 
     @CreatedDate
-    @Column(name = "created_at", updatable = false)
+    @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
     @LastModifiedDate
-    @Column(name = "updated_at")
+    @Column(name = "updated_at", nullable = false)
     private LocalDateTime updatedAt;
 }
