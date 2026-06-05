@@ -8,6 +8,11 @@ import lombok.*;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
+/**
+ * Entity JPA per la motorizzazione di un veicolo.
+ * Estende BaseAuditEntity per il tracciamento automatico
+ * di createdAt e updatedAt tramite Spring Data JPA Auditing.
+ */
 @Entity
 @Table(
     name = "motorizzazione",
@@ -21,8 +26,8 @@ import java.time.LocalDateTime;
 @AllArgsConstructor
 @Builder
 @ToString(exclude = "modello")
-@EqualsAndHashCode(onlyExplicitlyIncluded = true)
-public class Motorizzazione {
+@EqualsAndHashCode(onlyExplicitlyIncluded = true, callSuper = false)
+public class Motorizzazione extends BaseAuditEntity {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -38,7 +43,7 @@ public class Motorizzazione {
     // -------------------------
 
     @Column(name = "nome_motore", nullable = false, length = 150)
-    private String nomeMotore; // es. "2.0 TDI 150 CV DSG"
+    private String nomeMotore;
 
     @Column(name = "anno_produzione", nullable = false)
     private Integer annoProduzione;
@@ -56,7 +61,7 @@ public class Motorizzazione {
     // -------------------------
 
     @Column(name = "potenza_kw", nullable = false)
-    private Integer potenzaKw; // Necessario per calcolo bollo ACI
+    private Integer potenzaKw;
 
     @Column(name = "potenza_cv")
     private Integer potenzaCv;
@@ -78,14 +83,14 @@ public class Motorizzazione {
     private BigDecimal consumoExtraurbanoLitri100km;
 
     @Column(name = "autonomia_km_elettrica")
-    private Integer autonomiaKmElettrica; // Solo EV/PHEV
+    private Integer autonomiaKmElettrica;
 
     // -------------------------
     // PNEUMATICI
     // -------------------------
 
     @Column(name = "misura_pneumatici_anteriori", length = 30)
-    private String misuraPneumaticiAnteriori; // es. "205/55 R16"
+    private String misuraPneumaticiAnteriori;
 
     @Column(name = "misura_pneumatici_posteriori", length = 30)
     private String misuraPneumaticiPosteriori;
@@ -106,13 +111,13 @@ public class Motorizzazione {
     // -------------------------
 
     @Column(name = "costo_tagliando_base_eur", precision = 8, scale = 2)
-    private BigDecimal costoTagliandoBaseEur; // Tagliando ordinario
+    private BigDecimal costoTagliandoBaseEur;
 
     @Column(name = "costo_tagliando_maior_eur", precision = 8, scale = 2)
-    private BigDecimal costoTagliandoMaiorEur; // Tagliando maggiore (cinghia, ecc.)
+    private BigDecimal costoTagliandoMaiorEur;
 
     @Column(name = "intervallo_tagliando_km")
-    private Integer intervalloTagliandoKm; // es. 15000, 20000, 30000
+    private Integer intervalloTagliandoKm;
 
     @Column(name = "intervallo_tagliando_maior_km")
     private Integer intervalloTagliandoMaiorKm;
@@ -122,14 +127,14 @@ public class Motorizzazione {
     // -------------------------
 
     @Column(name = "gruppo_assicurativo")
-    private Integer gruppoAssicurativo; // Classe rischio 1-20
+    private Integer gruppoAssicurativo;
 
     // -------------------------
     // METADATA
     // -------------------------
 
     @Column(name = "fonte_dati", length = 500)
-    private String fonteDati; // URL/fonte usata dall'AI
+    private String fonteDati;
 
     @Column(name = "data_estrazione")
     private LocalDateTime dataEstrazione;

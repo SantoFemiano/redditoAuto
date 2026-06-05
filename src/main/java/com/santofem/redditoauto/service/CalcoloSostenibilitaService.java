@@ -1,5 +1,6 @@
 package com.santofem.redditoauto.service;
 
+import com.santofem.redditoauto.config.BolloAciProperties;
 import com.santofem.redditoauto.entity.Motorizzazione;
 import com.santofem.redditoauto.entity.enums.TipoCarburante;
 import com.santofem.redditoauto.repository.MotorizzazioneRepository;
@@ -8,6 +9,7 @@ import com.santofem.redditoauto.service.dto.CalcoloRispostaDTO;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -21,17 +23,18 @@ import java.math.RoundingMode;
  *   R = P * [ i(1+i)^n ] / [ (1+i)^n - 1 ]
  *   dove P = capitale finanziato, i = TAN/12, n = numero rate
  *
- * Bollo ACI Italia 2024:
- *   Benzina/Ibrido:  2.58 €/kW fino a 100 kW + 3.87 €/kW oltre
- *   Diesel:          +0.26/0.39 €/kW di maggiorazione
- *   Elettrico puro:  esente (0 €)
- *   Minimo bollo:    27.00 €/anno
+ * Bollo ACI Italia:
+ *   Tariffe caricate da BolloAciProperties (application.properties).
+ *   Aggiornabile senza ricompilare il codice.
  *
  * Giudizio di sostenibilità (% reddito assorbita dall'auto):
  *   OTTIMO      → ≤ 20%
  *   ACCETTABILE → ≤ 30%
  *   ATTENZIONE  → ≤ 40%
  *   CRITICO     → > 40%
+ *
+ * @Cacheable su calcola() con chiave composta: i risultati identici
+ * non vengono ricalcolati per 10 minuti (TTL Caffeine in CacheConfig).
  */
 @Service
 @RequiredArgsConstructor
@@ -39,14 +42,7 @@ import java.math.RoundingMode;
 public class CalcoloSostenibilitaService {
 
     private final MotorizzazioneRepository motorizzazioneRepository;
-
-    // ── Bollo ACI ────────────────────────────────────────────────
-    private static final BigDecimal BOLLO_BASE_KW       = new BigDecimal("2.58");
-    private static final BigDecimal BOLLO_EXTRA_KW      = new BigDecimal("3.87");
-    private static final BigDecimal BOLLO_DIESEL_BASE   = new BigDecimal("0.26");
-    private static final BigDecimal BOLLO_DIESEL_EXTRA  = new BigDecimal("0.39");
-    private static final int        BOLLO_SOGLIA_KW     = 100;
-    private static final BigDecimal BOLLO_MINIMO        = new BigDecimal("27.00");
+    private final BolloAciProperties bolloAciProperties;
 
     // ── Pneumatici ───────────────────────────────────────────────
     private static final BigDecimal PNEUMATICI_STANDARD = new BigDecimal("400.00");
@@ -70,13 +66,21 @@ public class CalcoloSostenibilitaService {
     // ENTRY POINT PUBBLICO
     // =============================================================
 
+    /**
+     * Calcola la sostenibilità economica mensile completa di un'auto.
+     * Il risultato è cacheable: richieste identiche (stessa motorizzazione,
+     * reddito e km) vengono servite dalla cache Caffeine senza query al DB.
+     */
+    @Cacheable(
+            value = "calcoli",
+            key = "#request.motorizzazioneId + '_' + #request.redditoNettoMensile + '_' + #request.kmMensiliStimati + '_' + #request.tanPercentuale"
+    )
     public CalcoloRispostaDTO calcola(CalcoloRequestDTO request) {
 
         Motorizzazione m = motorizzazioneRepository.findById(request.getMotorizzazioneId())
                 .orElseThrow(() -> new EntityNotFoundException(
                         "Motorizzazione non trovata con id: " + request.getMotorizzazioneId()));
 
-        // TAN da percentuale a decimale (es. 7.5 → 0.075)
         BigDecimal tanDecimale = request.getTanPercentuale()
                 .divide(BigDecimal.valueOf(100), 10, RoundingMode.HALF_UP);
 
@@ -88,7 +92,6 @@ public class CalcoloSostenibilitaService {
         int        kmMensili    = request.getKmMensiliStimati();
         BigDecimal prezzoCarb   = request.getPrezzoCombustibileLitro();
 
-        // ── Calcoli singoli ───────────────────────────────────────
         BigDecimal rata              = calcolaRataFrancese(prezzoFinanz, tanDecimale, durata);
         BigDecimal interessiTotali   = rata.multiply(BigDecimal.valueOf(durata))
                 .subtract(prezzoFinanz).max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP);
@@ -100,7 +103,6 @@ public class CalcoloSostenibilitaService {
         BigDecimal bolloMensile      = calcolaBolloMensile(m);
         BigDecimal assicMensile      = calcolaAssicurazioneMensile(request, m);
 
-        // ── Totali ────────────────────────────────────────────────
         BigDecimal totCostiVivi = costoCarb
                 .add(costoPneum)
                 .add(tagliandi[0])
@@ -110,7 +112,6 @@ public class CalcoloSostenibilitaService {
 
         BigDecimal totMensile = rata.add(totCostiVivi);
 
-        // ── Sostenibilità ─────────────────────────────────────────
         BigDecimal reddito = request.getRedditoNettoMensile();
         BigDecimal percReddito = totMensile
                 .divide(reddito, 6, RoundingMode.HALF_UP)
@@ -121,14 +122,13 @@ public class CalcoloSostenibilitaService {
         String  consigli    = generaConsigli(percReddito, m, durata, anticipo);
         boolean sostenibile = percReddito.compareTo(SOGLIA_ACCETTABILE) <= 0;
 
-        // ── Label auto ───────────────────────────────────────────
         String label = String.format("%s %s %s (%d)",
                 m.getModello().getMarca().getNome(),
                 m.getModello().getNome(),
                 m.getNomeMotore(),
                 m.getAnnoProduzione());
 
-        log.debug("Calcolo completato: {} → totale={}€/mese ({}%)", label, totMensile, percReddito);
+        log.debug("Calcolo completato: {} → totale={}\u20ac/mese ({}%)", label, totMensile, percReddito);
 
         return CalcoloRispostaDTO.builder()
                 .marcaModelloMotore(label)
@@ -245,28 +245,28 @@ public class CalcoloSostenibilitaService {
     }
 
     // =============================================================
-    // BOLLO ACI MENSILE
+    // BOLLO ACI MENSILE — tariffe da BolloAciProperties
     // =============================================================
     private BigDecimal calcolaBolloMensile(Motorizzazione m) {
         if (m.getTipoCarburante() == TipoCarburante.ELETTRICO) return BigDecimal.ZERO;
 
         int        kw     = m.getPotenzaKw() != null ? m.getPotenzaKw() : 70;
-        BigDecimal bBase  = BOLLO_BASE_KW;
-        BigDecimal bExtra = BOLLO_EXTRA_KW;
+        BigDecimal bBase  = bolloAciProperties.baseKw();
+        BigDecimal bExtra = bolloAciProperties.extraKw();
 
         boolean isDiesel = m.getTipoCarburante() == TipoCarburante.DIESEL
                         || m.getTipoCarburante() == TipoCarburante.IBRIDO_DIESEL;
         if (isDiesel) {
-            bBase  = bBase.add(BOLLO_DIESEL_BASE);
-            bExtra = bExtra.add(BOLLO_DIESEL_EXTRA);
+            bBase  = bBase.add(bolloAciProperties.dieselBase());
+            bExtra = bExtra.add(bolloAciProperties.dieselExtra());
         }
 
-        BigDecimal bolloAnnuo = kw <= BOLLO_SOGLIA_KW
+        BigDecimal bolloAnnuo = kw <= bolloAciProperties.sogliaKw()
                 ? bBase.multiply(BigDecimal.valueOf(kw))
-                : bBase.multiply(BigDecimal.valueOf(BOLLO_SOGLIA_KW))
-                        .add(bExtra.multiply(BigDecimal.valueOf(kw - BOLLO_SOGLIA_KW)));
+                : bBase.multiply(BigDecimal.valueOf(bolloAciProperties.sogliaKw()))
+                        .add(bExtra.multiply(BigDecimal.valueOf(kw - bolloAciProperties.sogliaKw())));
 
-        return bolloAnnuo.max(BOLLO_MINIMO)
+        return bolloAnnuo.max(bolloAciProperties.minimo())
                 .divide(BigDecimal.valueOf(12), 2, RoundingMode.HALF_UP);
     }
 
