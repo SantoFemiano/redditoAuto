@@ -35,6 +35,9 @@ import java.math.RoundingMode;
  *
  * @Cacheable su calcola() con chiave composta: i risultati identici
  * non vengono ricalcolati per 10 minuti (TTL Caffeine in CacheConfig).
+ * La chiave usa stripTrailingZeros().toPlainString() sui BigDecimal per
+ * garantire che valori numericamente identici (es: 2000 vs 2000.00)
+ * producano la stessa chiave cache.
  */
 @Service
 @RequiredArgsConstructor
@@ -44,12 +47,12 @@ public class CalcoloSostenibilitaService {
     private final MotorizzazioneRepository motorizzazioneRepository;
     private final BolloAciProperties bolloAciProperties;
 
-    // ── Pneumatici ───────────────────────────────────────────────
+    // ── Pneumatici ────────────────────────────────────────────
     private static final BigDecimal PNEUMATICI_STANDARD = new BigDecimal("400.00");
     private static final BigDecimal PNEUMATICI_RUNFLAT  = new BigDecimal("700.00");
     private static final int        PNEUMATICI_MESI     = 36;
 
-    // ── Fallback consumi/costi ────────────────────────────────────
+    // ── Fallback consumi/costi ──────────────────────────────
     private static final BigDecimal CONSUMO_FALLBACK      = new BigDecimal("8.00");
     private static final BigDecimal CONSUMO_EV_KWH_100KM  = new BigDecimal("16.00");
     private static final BigDecimal TAGLIANDO_BASE_FB     = new BigDecimal("250.00");
@@ -57,7 +60,7 @@ public class CalcoloSostenibilitaService {
     private static final int        INTERVALLO_BASE_FB    = 15_000;
     private static final int        INTERVALLO_MAIOR_FB   = 60_000;
 
-    // ── Soglie sostenibilità ──────────────────────────────────────
+    // ── Soglie sostenibilità ──────────────────────────────
     private static final BigDecimal SOGLIA_OTTIMO      = new BigDecimal("20.00");
     private static final BigDecimal SOGLIA_ACCETTABILE = new BigDecimal("30.00");
     private static final BigDecimal SOGLIA_ATTENZIONE  = new BigDecimal("40.00");
@@ -70,10 +73,17 @@ public class CalcoloSostenibilitaService {
      * Calcola la sostenibilità economica mensile completa di un'auto.
      * Il risultato è cacheable: richieste identiche (stessa motorizzazione,
      * reddito e km) vengono servite dalla cache Caffeine senza query al DB.
+     *
+     * La chiave è normalizzata: i BigDecimal vengono convertiti con
+     * stripTrailingZeros().toPlainString() per evitare cache miss su
+     * valori identici con rappresentazioni diverse (2000 vs 2000.0).
      */
     @Cacheable(
             value = "calcoli",
-            key = "#request.motorizzazioneId + '_' + #request.redditoNettoMensile + '_' + #request.kmMensiliStimati + '_' + #request.tanPercentuale"
+            key = "#request.motorizzazioneId + '_'
+               + T(com.santofem.redditoauto.service.CalcoloSostenibilitaService).normalizeKey(#request.redditoNettoMensile) + '_'
+               + #request.kmMensiliStimati + '_'
+               + T(com.santofem.redditoauto.service.CalcoloSostenibilitaService).normalizeKey(#request.tanPercentuale)"
     )
     public CalcoloRispostaDTO calcola(CalcoloRequestDTO request) {
 
@@ -128,12 +138,12 @@ public class CalcoloSostenibilitaService {
                 m.getNomeMotore(),
                 m.getAnnoProduzione());
 
-        log.debug("Calcolo completato: {} → totale={}\u20ac/mese ({}%)", label, totMensile, percReddito);
+        log.debug("Calcolo completato: {} \u2192 totale={}€/mese ({}%)", label, totMensile, percReddito);
 
         return CalcoloRispostaDTO.builder()
                 .marcaModelloMotore(label)
                 .prezzoFinanziato(prezzoFinanz)
-                .rataFiananziamentoMensile(rata)
+                .rataFinanziamentoMensile(rata)
                 .durataFinanziamentoMesi(durata)
                 .tanPercentuale(request.getTanPercentuale())
                 .costoTotaleFinanziamento(costoTotaleFinanz)
@@ -152,6 +162,18 @@ public class CalcoloSostenibilitaService {
                 .giudizio(giudizio)
                 .messaggioConsigli(consigli)
                 .build();
+    }
+
+    /**
+     * Normalizza un BigDecimal per l'uso come chiave cache.
+     * Rimuove gli zeri finali e usa la rappresentazione plain (senza notazione scientifica).
+     * Metodo statico per essere richiamabile nelle SpEL expression di @Cacheable.
+     *
+     * Esempi: 2000.00 -> "2000", 7.50 -> "7.5", 1.85 -> "1.85"
+     */
+    public static String normalizeKey(BigDecimal value) {
+        if (value == null) return "null";
+        return value.stripTrailingZeros().toPlainString();
     }
 
     // =============================================================
