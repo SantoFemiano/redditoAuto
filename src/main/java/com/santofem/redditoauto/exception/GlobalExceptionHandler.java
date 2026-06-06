@@ -21,7 +21,7 @@ import java.util.stream.Collectors;
  * {
  *   "type": "...",
  *   "title": "...",
- *   "status": 404,
+ *   "status": 4xx/5xx,
  *   "detail": "...",
  *   "instance": "/api/...",
  *   "timestamp": "2026-..."
@@ -75,6 +75,25 @@ public class GlobalExceptionHandler {
         ProblemDetail pd = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, ex.getMessage());
         pd.setTitle("Argomento non valido");
         pd.setType(URI.create(BASE_URI + "/bad-request"));
+        pd.setProperty("timestamp", Instant.now());
+        return pd;
+    }
+
+    /**
+     * IllegalStateException → 422 Unprocessable Entity.
+     *
+     * Lanciata da CarDataPersistenceService quando il DTO estratto dall'AI
+     * non contiene i campi minimi obbligatori (marca/modello/anno).
+     * Restituire 500 sarebbe scorretto: si tratta di un errore di business
+     * dovuto a dati insufficienti, non a un malfunzionamento del server.
+     */
+    @ExceptionHandler(IllegalStateException.class)
+    public ProblemDetail handleIllegalState(IllegalStateException ex) {
+        log.warn("Stato non valido (dati insufficienti): {}", ex.getMessage());
+        ProblemDetail pd = ProblemDetail.forStatusAndDetail(
+                HttpStatus.UNPROCESSABLE_ENTITY, ex.getMessage());
+        pd.setTitle("Dati insufficienti per il salvataggio");
+        pd.setType(URI.create(BASE_URI + "/unprocessable"));
         pd.setProperty("timestamp", Instant.now());
         return pd;
     }
