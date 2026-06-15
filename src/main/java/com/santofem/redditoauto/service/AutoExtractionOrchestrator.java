@@ -30,7 +30,7 @@ public class AutoExtractionOrchestrator {
 
     /** Numero massimo di caratteri del testo scraping inviato a Gemini.
      *  Valori più alti aumentano il rischio di output token troncati (MalformedJsonException). */
-    private static final int MAX_SCRAPING_CHARS = 3500;
+    private static final int MAX_SCRAPING_CHARS = 4500;
 
     private final WebScraper webScraper;
     private final AiCarDataExtractor aiExtractor;
