@@ -54,12 +54,12 @@ public class CalcoloSostenibilitaService {
     private static final int        PNEUMATICI_MESI     = 36;
 
     // ── Fallback consumi/costi ────────────────────────────────────
-    private static final BigDecimal CONSUMO_FALLBACK      = new BigDecimal("8.00");
-    private static final BigDecimal CONSUMO_EV_KWH_100KM  = new BigDecimal("16.00");
-    private static final BigDecimal TAGLIANDO_BASE_FB     = new BigDecimal("250.00");
-    private static final BigDecimal TAGLIANDO_MAIOR_FB    = new BigDecimal("600.00");
-    private static final int        INTERVALLO_BASE_FB    = 15_000;
-    private static final int        INTERVALLO_MAIOR_FB   = 60_000;
+    private static final BigDecimal CONSUMO_FALLBACK     = new BigDecimal("8.00");
+    private static final BigDecimal CONSUMO_EV_KWH_100KM = new BigDecimal("16.00");
+    private static final BigDecimal TAGLIANDO_BASE_FB    = new BigDecimal("250.00");
+    private static final BigDecimal TAGLIANDO_MAIOR_FB   = new BigDecimal("600.00");
+    private static final int        INTERVALLO_BASE_FB   = 15_000;
+    private static final int        INTERVALLO_MAIOR_FB  = 60_000;
 
     // ── Soglie sostenibilità ──────────────────────────────────────
     private static final BigDecimal SOGLIA_OTTIMO      = new BigDecimal("20.00");
@@ -80,19 +80,19 @@ public class CalcoloSostenibilitaService {
         BigDecimal tanDecimale = request.getTanPercentuale()
                 .divide(BigDecimal.valueOf(100), 10, RoundingMode.HALF_UP);
 
-        Double prezzoAuto   = m.getPrezzoListinoEur() != null
-                ? m.getPrezzoListinoEur() : 0.0;
+        // FIX: prezzoListinoEur ora è BigDecimal nell'entity — nessun Double intermedio
+        BigDecimal prezzoAuto   = nvl(m.getPrezzoListinoEur(), BigDecimal.ZERO);
         BigDecimal anticipo     = request.getAcconto();
-        Double prezzoFinanz = prezzoAuto-anticipo.doubleValue();
-        if(prezzoFinanz<0){prezzoFinanz=0.0;}
-        int        durata       = request.getDurataFinanziamentoMesi();
-        int        kmMensili    = request.getKmMensiliStimati();
-        BigDecimal prezzoCarb   = request.getPrezzoCombustibileLitro();
+        BigDecimal prezzoFinanz = prezzoAuto.subtract(anticipo).max(BigDecimal.ZERO);
+
+        int        durata     = request.getDurataFinanziamentoMesi();
+        int        kmMensili  = request.getKmMensiliStimati();
+        BigDecimal prezzoCarb = request.getPrezzoCombustibileLitro();
 
         // ── Calcoli singoli ───────────────────────────────────────
-        BigDecimal rata              = calcolaRataFrancese(BigDecimal.valueOf(prezzoFinanz), tanDecimale, durata);
+        BigDecimal rata              = calcolaRataFrancese(prezzoFinanz, tanDecimale, durata);
         BigDecimal interessiTotali   = rata.multiply(BigDecimal.valueOf(durata))
-                .subtract(BigDecimal.valueOf(prezzoFinanz)).max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP);
+                .subtract(prezzoFinanz).max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP);
         BigDecimal costoTotaleFinanz = rata.multiply(BigDecimal.valueOf(durata))
                 .setScale(2, RoundingMode.HALF_UP);
         BigDecimal costoCarb         = calcolaCostoCarburanteMensile(m, kmMensili, prezzoCarb);
@@ -133,7 +133,7 @@ public class CalcoloSostenibilitaService {
 
         return CalcoloRispostaDTO.builder()
                 .marcaModelloMotore(label)
-                .prezzoFinanziato(BigDecimal.valueOf(prezzoFinanz))
+                .prezzoFinanziato(prezzoFinanz)
                 .rataFiananziamentoMensile(rata)
                 .durataFinanziamentoMesi(durata)
                 .tanPercentuale(request.getTanPercentuale())
@@ -192,8 +192,7 @@ public class CalcoloSostenibilitaService {
                     .setScale(2, RoundingMode.HALF_UP);
         }
 
-        BigDecimal consumo = m.getConsumoMedioLitri100km() != null
-                ? m.getConsumoMedioLitri100km() : CONSUMO_FALLBACK;
+        BigDecimal consumo = nvl(m.getConsumoMedioLitri100km(), CONSUMO_FALLBACK);
 
         if (tipo == TipoCarburante.IBRIDO_PLUGIN) {
             BigDecimal kmTermici   = BigDecimal.valueOf(kmMensili).multiply(new BigDecimal("0.40"));
@@ -225,17 +224,19 @@ public class CalcoloSostenibilitaService {
 
     // =============================================================
     // COSTO TAGLIANDI MENSILE — [0]=ordinario, [1]=maior
+    // FIX: rimosso BigDecimal.valueOf(Double) che causa NPE se il campo è null.
+    //      nvl() ora opera direttamente su BigDecimal (i campi sono BigDecimal nell'entity).
     // =============================================================
     private BigDecimal[] calcolaCostoTagliandiMensile(Motorizzazione m, int kmMensili) {
-        BigDecimal costoBase  = nvl(BigDecimal.valueOf(m.getCostoTagliandoBaseEur()),  TAGLIANDO_BASE_FB);
-        BigDecimal costoMaior = nvl(BigDecimal.valueOf(m.getCostoTagliandoMaiorEur()), TAGLIANDO_MAIOR_FB);
+        BigDecimal costoBase  = nvl(m.getCostoTagliandoBaseEur(),  TAGLIANDO_BASE_FB);
+        BigDecimal costoMaior = nvl(m.getCostoTagliandoMaiorEur(), TAGLIANDO_MAIOR_FB);
         int        kmBase     = nvl(m.getIntervalloTagliandoKm(),      INTERVALLO_BASE_FB);
         int        kmMaior    = nvl(m.getIntervalloTagliandoMaiorKm(), INTERVALLO_MAIOR_FB);
 
-        int    kmAnnui             = kmMensili * 12;
-        double tagliandiMaiorAnno  = (double) kmAnnui / kmMaior;
-        double tagliandiBaseAnno   = (double) kmAnnui / kmBase;
-        double tagliandiOrdAnno    = Math.max(0, tagliandiBaseAnno - tagliandiMaiorAnno);
+        int    kmAnnui            = kmMensili * 12;
+        double tagliandiMaiorAnno = (double) kmAnnui / kmMaior;
+        double tagliandiBaseAnno  = (double) kmAnnui / kmBase;
+        double tagliandiOrdAnno   = Math.max(0, tagliandiBaseAnno - tagliandiMaiorAnno);
 
         BigDecimal mensileOrd   = costoBase.multiply(BigDecimal.valueOf(tagliandiOrdAnno))
                 .divide(BigDecimal.valueOf(12), 2, RoundingMode.HALF_UP);

@@ -41,16 +41,18 @@ public class CarDataMapper {
             .potenzaKw(dto.potenzaKw())
             .potenzaCv(dto.potenzaCv())
             .cilindrataCC(dto.cilindrataCC())
-            .consumoMedioLitri100km(BigDecimal.valueOf(dto.consumoMedioLitri100km()))
-            .consumoUrbanoLitri100km(dto.consumoUrbanoLitri100km())
-            .consumoExtraurbanoLitri100km(dto.consumoExtraurbanoLitri100km())
+            // FIX: tutti i Double → BigDecimal in modo null-safe tramite toDecimal()
+            .consumoMedioLitri100km(toDecimal(dto.consumoMedioLitri100km()))
+            .consumoUrbanoLitri100km(toDecimal(dto.consumoUrbanoLitri100km()))
+            .consumoExtraurbanoLitri100km(toDecimal(dto.consumoExtraurbanoLitri100km()))
             .autonomiaKmElettrica(dto.autonomiaKmElettrica())
             .misuraPneumaticiAnteriori(dto.misuraPneumaticiAnteriori())
             .misuraPneumaticiPosteriori(dto.misuraPneumaticiPosteriori())
             .runFlat(dto.runFlat() != null ? dto.runFlat() : false)
-            .prezzoListinoEur(dto.prezzoListinoEur())
-            .costoTagliandoBaseEur(dto.costoTagliandoBaseEur())
-            .costoTagliandoMaiorEur(dto.costoTagliandoMaiorEur())
+            // FIX: Double → BigDecimal null-safe
+            .prezzoListinoEur(toDecimal(dto.prezzoListinoEur()))
+            .costoTagliandoBaseEur(toDecimal(dto.costoTagliandoBaseEur()))
+            .costoTagliandoMaiorEur(toDecimal(dto.costoTagliandoMaiorEur()))
             .intervalloTagliandoKm(dto.intervalloTagliandoKm())
             .intervalloTagliandoMaiorKm(dto.intervalloTagliandoMaiorKm())
             .gruppoAssicurativo(dto.gruppoAssicurativo())
@@ -71,19 +73,24 @@ public class CarDataMapper {
             .annoProduzione(m.getAnnoProduzione())
             .tipoCarburante(m.getTipoCarburante() != null ? m.getTipoCarburante().name() : null)
             .tipoCambio(m.getTipoCambio() != null ? m.getTipoCambio().name() : null)
-            .potenzaKw(Double.valueOf(m.getPotenzaKw()))
+            // FIX: Integer potenzaKw → doubleValue() con null guard (non Double.valueOf che genera warning)
+            .potenzaKw(m.getPotenzaKw() != null ? m.getPotenzaKw().doubleValue() : null)
             .potenzaCv(m.getPotenzaCv())
             .cilindrataCC(m.getCilindrataCC())
+            // consumoMedio è già BigDecimal; urbano/extraurbano ora BigDecimal → toDouble() null-safe
             .consumoMedioLitri100km(m.getConsumoMedioLitri100km())
-            .consumoUrbanoLitri100km(m.getConsumoUrbanoLitri100km())
-            .consumoExtraurbanoLitri100km(m.getConsumoExtraurbanoLitri100km())
-            .autonomiaKmElettrica(Double.valueOf(m.getAutonomiaKmElettrica()))
+            .consumoUrbanoLitri100km(toDouble(m.getConsumoUrbanoLitri100km()))
+            .consumoExtraurbanoLitri100km(toDouble(m.getConsumoExtraurbanoLitri100km()))
+            // FIX: autonomiaKmElettrica è Integer → doubleValue() con null guard (NPE se null con Double.valueOf)
+            .autonomiaKmElettrica(m.getAutonomiaKmElettrica() != null
+                    ? m.getAutonomiaKmElettrica().doubleValue() : null)
             .misuraPneumaticiAnteriori(m.getMisuraPneumaticiAnteriori())
             .misuraPneumaticiPosteriori(m.getMisuraPneumaticiPosteriori())
             .runFlat(m.getRunFlat())
-            .prezzoListinoEur(m.getPrezzoListinoEur())
-            .costoTagliandoBaseEur(m.getCostoTagliandoBaseEur())
-            .costoTagliandoMaiorEur(m.getCostoTagliandoMaiorEur())
+            // FIX: prezzoListinoEur/costi ora BigDecimal → toDouble() null-safe
+            .prezzoListinoEur(toDouble(m.getPrezzoListinoEur()))
+            .costoTagliandoBaseEur(toDouble(m.getCostoTagliandoBaseEur()))
+            .costoTagliandoMaiorEur(toDouble(m.getCostoTagliandoMaiorEur()))
             .intervalloTagliandoKm(m.getIntervalloTagliandoKm())
             .intervalloTagliandoMaiorKm(m.getIntervalloTagliandoMaiorKm())
             .gruppoAssicurativo(m.getGruppoAssicurativo())
@@ -107,13 +114,12 @@ public class CarDataMapper {
         try {
             return TipoCarburante.valueOf(upper);
         } catch (IllegalArgumentException e) {
-            // Gestisce varianti non standard restituite dall'AI
             if (upper.contains("DIESEL"))  return TipoCarburante.DIESEL;
             if (upper.contains("BENZINA") || upper.contains("PETROL") || upper.contains("GASOLINE"))
                 return TipoCarburante.BENZINA;
             if (upper.contains("ELETTR") || upper.contains("ELECTR") || upper.contains("BEV"))
                 return TipoCarburante.ELETTRICO;
-            if (upper.contains("PLUGIN") || upper.contains("PHEV"))
+            if (upper.contains("PLUG") || upper.contains("PHEV"))
                 return TipoCarburante.IBRIDO_PLUGIN;
             if (upper.contains("IBRIDO") || upper.contains("HYBRID") || upper.contains("HEV"))
                 return TipoCarburante.IBRIDO_BENZINA;
@@ -121,7 +127,7 @@ public class CarDataMapper {
                 return TipoCarburante.GPL;
             if (upper.contains("METANO") || upper.contains("CNG"))
                 return TipoCarburante.METANO;
-            log.warn("TipoCarburante non riconosciuto: '{}', impostato a null", raw);
+            log.warn("TipoCarburante non riconosciuto: '{}' → null", raw);
             return null;
         }
     }
@@ -135,23 +141,29 @@ public class CarDataMapper {
         try {
             return TipoCambio.valueOf(upper);
         } catch (IllegalArgumentException e) {
-            if (upper.contains("MANUALE") || upper.contains("MANUAL") || upper.contains("MT"))
+            if (upper.contains("MANUALE") || upper.contains("MANUAL"))
                 return TipoCambio.MANUALE;
-            if (upper.contains("DCT") || upper.contains("DSG") || upper.contains("PDK") || upper.contains("EDC"))
+            if (upper.contains("DCT") || upper.contains("DSG") || upper.contains("PDK")
+                    || upper.contains("S_TRONIC") || upper.contains("DOPPIA"))
                 return TipoCambio.DCT;
-            if (upper.contains("CVT"))
+            if (upper.contains("CVT") || upper.contains("VARIABILE"))
                 return TipoCambio.CVT;
-            if (upper.contains("SINGOLA") || upper.contains("SINGLE") || upper.contains("RIDUTTORE"))
+            if (upper.contains("SINGOLA") || upper.contains("ELECTRIC") || upper.contains("1_MARCIA"))
                 return TipoCambio.SINGOLA_MARCIA;
-            if (upper.contains("AUTO") || upper.contains("AT") || upper.contains("AUTOMATICO"))
+            if (upper.contains("AUTO") || upper.contains("TORQUE") || upper.contains("TRADIZIONALE"))
                 return TipoCambio.AUTOMATICO_TRADIZIONALE;
-            log.warn("TipoCambio non riconosciuto: '{}', impostato a null", raw);
+            log.warn("TipoCambio non riconosciuto: '{}' → null", raw);
             return null;
         }
     }
 
-    /** Converte Double nullable in BigDecimal, null-safe. */
+    /** Converte Double nullable in BigDecimal, null-safe. Evita NullPointerException su BigDecimal.valueOf(null). */
     private BigDecimal toDecimal(Double value) {
         return value != null ? BigDecimal.valueOf(value) : null;
+    }
+
+    /** Converte BigDecimal nullable in Double, null-safe. */
+    private Double toDouble(BigDecimal value) {
+        return value != null ? value.doubleValue() : null;
     }
 }

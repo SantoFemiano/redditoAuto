@@ -38,7 +38,7 @@ public class Motorizzazione {
     // -------------------------
 
     @Column(name = "nome_motore", nullable = false, length = 150)
-    private String nomeMotore; // es. "2.0 TDI 150 CV DSG"
+    private String nomeMotore;
 
     @Column(name = "anno_produzione", nullable = false)
     private Integer annoProduzione;
@@ -56,7 +56,7 @@ public class Motorizzazione {
     // -------------------------
 
     @Column(name = "potenza_kw", nullable = false)
-    private Integer potenzaKw; // Necessario per calcolo bollo ACI
+    private Integer potenzaKw;
 
     @Column(name = "potenza_cv")
     private Integer potenzaCv;
@@ -65,27 +65,27 @@ public class Motorizzazione {
     private Integer cilindrataCC;
 
     // -------------------------
-    // CONSUMI
+    // CONSUMI — tutti BigDecimal per precisione nei calcoli finanziari
     // -------------------------
 
     @Column(name = "consumo_medio_litri_100km", precision = 5, scale = 2)
     private BigDecimal consumoMedioLitri100km;
 
     @Column(name = "consumo_urbano_litri_100km", precision = 5, scale = 2)
-    private Double consumoUrbanoLitri100km;
+    private BigDecimal consumoUrbanoLitri100km;
 
     @Column(name = "consumo_extraurbano_litri_100km", precision = 5, scale = 2)
-    private Double consumoExtraurbanoLitri100km;
+    private BigDecimal consumoExtraurbanoLitri100km;
 
     @Column(name = "autonomia_km_elettrica")
-    private Integer autonomiaKmElettrica; // Solo EV/PHEV
+    private Integer autonomiaKmElettrica;
 
     // -------------------------
     // PNEUMATICI
     // -------------------------
 
     @Column(name = "misura_pneumatici_anteriori", length = 30)
-    private String misuraPneumaticiAnteriori; // es. "205/55 R16"
+    private String misuraPneumaticiAnteriori;
 
     @Column(name = "misura_pneumatici_posteriori", length = 30)
     private String misuraPneumaticiPosteriori;
@@ -95,24 +95,24 @@ public class Motorizzazione {
     private Boolean runFlat = false;
 
     // -------------------------
-    // PREZZO LISTINO
+    // PREZZO LISTINO — BigDecimal per precisione monetaria
     // -------------------------
 
     @Column(name = "prezzo_listino_eur", precision = 12, scale = 2)
-    private Double prezzoListinoEur;
+    private BigDecimal prezzoListinoEur;
 
     // -------------------------
-    // COSTI TAGLIANDI
+    // COSTI TAGLIANDI — BigDecimal per precisione monetaria
     // -------------------------
 
     @Column(name = "costo_tagliando_base_eur", precision = 8, scale = 2)
-    private Double costoTagliandoBaseEur; // Tagliando ordinario
+    private BigDecimal costoTagliandoBaseEur;
 
     @Column(name = "costo_tagliando_maior_eur", precision = 8, scale = 2)
-    private Double costoTagliandoMaiorEur; // Tagliando maggiore (cinghia, ecc.)
+    private BigDecimal costoTagliandoMaiorEur;
 
     @Column(name = "intervallo_tagliando_km")
-    private Integer intervalloTagliandoKm; // es. 15000, 20000, 30000
+    private Integer intervalloTagliandoKm;
 
     @Column(name = "intervallo_tagliando_maior_km")
     private Integer intervalloTagliandoMaiorKm;
@@ -122,14 +122,14 @@ public class Motorizzazione {
     // -------------------------
 
     @Column(name = "gruppo_assicurativo")
-    private Integer gruppoAssicurativo; // Classe rischio 1-20
+    private Integer gruppoAssicurativo;
 
     // -------------------------
     // METADATA
     // -------------------------
 
     @Column(name = "fonte_dati", length = 500)
-    private String fonteDati; // URL/fonte usata dall'AI
+    private String fonteDati;
 
     @Column(name = "data_estrazione")
     private LocalDateTime dataEstrazione;
