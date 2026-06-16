@@ -80,18 +80,19 @@ public class CalcoloSostenibilitaService {
         BigDecimal tanDecimale = request.getTanPercentuale()
                 .divide(BigDecimal.valueOf(100), 10, RoundingMode.HALF_UP);
 
-        BigDecimal prezzoAuto   = m.getPrezzoListinoEur() != null
-                ? m.getPrezzoListinoEur() : BigDecimal.ZERO;
+        Double prezzoAuto   = m.getPrezzoListinoEur() != null
+                ? m.getPrezzoListinoEur() : 0.0;
         BigDecimal anticipo     = request.getAcconto();
-        BigDecimal prezzoFinanz = prezzoAuto.subtract(anticipo).max(BigDecimal.ZERO);
+        Double prezzoFinanz = prezzoAuto-anticipo.doubleValue();
+        if(prezzoFinanz<0){prezzoFinanz=0.0;}
         int        durata       = request.getDurataFinanziamentoMesi();
         int        kmMensili    = request.getKmMensiliStimati();
         BigDecimal prezzoCarb   = request.getPrezzoCombustibileLitro();
 
         // ── Calcoli singoli ───────────────────────────────────────
-        BigDecimal rata              = calcolaRataFrancese(prezzoFinanz, tanDecimale, durata);
+        BigDecimal rata              = calcolaRataFrancese(BigDecimal.valueOf(prezzoFinanz), tanDecimale, durata);
         BigDecimal interessiTotali   = rata.multiply(BigDecimal.valueOf(durata))
-                .subtract(prezzoFinanz).max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP);
+                .subtract(BigDecimal.valueOf(prezzoFinanz)).max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP);
         BigDecimal costoTotaleFinanz = rata.multiply(BigDecimal.valueOf(durata))
                 .setScale(2, RoundingMode.HALF_UP);
         BigDecimal costoCarb         = calcolaCostoCarburanteMensile(m, kmMensili, prezzoCarb);
@@ -132,7 +133,7 @@ public class CalcoloSostenibilitaService {
 
         return CalcoloRispostaDTO.builder()
                 .marcaModelloMotore(label)
-                .prezzoFinanziato(prezzoFinanz)
+                .prezzoFinanziato(BigDecimal.valueOf(prezzoFinanz))
                 .rataFiananziamentoMensile(rata)
                 .durataFinanziamentoMesi(durata)
                 .tanPercentuale(request.getTanPercentuale())
@@ -226,8 +227,8 @@ public class CalcoloSostenibilitaService {
     // COSTO TAGLIANDI MENSILE — [0]=ordinario, [1]=maior
     // =============================================================
     private BigDecimal[] calcolaCostoTagliandiMensile(Motorizzazione m, int kmMensili) {
-        BigDecimal costoBase  = nvl(m.getCostoTagliandoBaseEur(),  TAGLIANDO_BASE_FB);
-        BigDecimal costoMaior = nvl(m.getCostoTagliandoMaiorEur(), TAGLIANDO_MAIOR_FB);
+        BigDecimal costoBase  = nvl(BigDecimal.valueOf(m.getCostoTagliandoBaseEur()),  TAGLIANDO_BASE_FB);
+        BigDecimal costoMaior = nvl(BigDecimal.valueOf(m.getCostoTagliandoMaiorEur()), TAGLIANDO_MAIOR_FB);
         int        kmBase     = nvl(m.getIntervalloTagliandoKm(),      INTERVALLO_BASE_FB);
         int        kmMaior    = nvl(m.getIntervalloTagliandoMaiorKm(), INTERVALLO_MAIOR_FB);
 

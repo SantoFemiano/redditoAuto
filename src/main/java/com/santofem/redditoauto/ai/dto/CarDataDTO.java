@@ -3,6 +3,8 @@ package com.santofem.redditoauto.ai.dto;
 import com.fasterxml.jackson.annotation.JsonPropertyDescription;
 import dev.langchain4j.model.output.structured.Description;
 
+import java.time.LocalDateTime;
+
 /**
  * DTO fortemente tipizzato restituito da Gemini tramite LangChain4j structured output.
  *
@@ -97,7 +99,6 @@ public record CarDataDTO(
 
     @JsonPropertyDescription("Gruppo assicurativo da 1 (rischio minimo) a 20 (rischio massimo). null se assente.")
     Integer gruppoAssicurativo
-
 ) {
     /**
      * Verifica che i campi obbligatori per il calcolo di sostenibilita' siano presenti.

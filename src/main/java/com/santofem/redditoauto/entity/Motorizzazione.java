@@ -72,10 +72,10 @@ public class Motorizzazione {
     private BigDecimal consumoMedioLitri100km;
 
     @Column(name = "consumo_urbano_litri_100km", precision = 5, scale = 2)
-    private BigDecimal consumoUrbanoLitri100km;
+    private Double consumoUrbanoLitri100km;
 
     @Column(name = "consumo_extraurbano_litri_100km", precision = 5, scale = 2)
-    private BigDecimal consumoExtraurbanoLitri100km;
+    private Double consumoExtraurbanoLitri100km;
 
     @Column(name = "autonomia_km_elettrica")
     private Integer autonomiaKmElettrica; // Solo EV/PHEV
@@ -99,17 +99,17 @@ public class Motorizzazione {
     // -------------------------
 
     @Column(name = "prezzo_listino_eur", precision = 12, scale = 2)
-    private BigDecimal prezzoListinoEur;
+    private Double prezzoListinoEur;
 
     // -------------------------
     // COSTI TAGLIANDI
     // -------------------------
 
     @Column(name = "costo_tagliando_base_eur", precision = 8, scale = 2)
-    private BigDecimal costoTagliandoBaseEur; // Tagliando ordinario
+    private Double costoTagliandoBaseEur; // Tagliando ordinario
 
     @Column(name = "costo_tagliando_maior_eur", precision = 8, scale = 2)
-    private BigDecimal costoTagliandoMaiorEur; // Tagliando maggiore (cinghia, ecc.)
+    private Double costoTagliandoMaiorEur; // Tagliando maggiore (cinghia, ecc.)
 
     @Column(name = "intervallo_tagliando_km")
     private Integer intervalloTagliandoKm; // es. 15000, 20000, 30000

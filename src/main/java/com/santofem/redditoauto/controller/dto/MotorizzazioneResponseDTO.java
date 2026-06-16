@@ -6,6 +6,9 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
+
 /**
  * DTO di risposta per l'estrazione dati auto.
  *
@@ -36,7 +39,7 @@ public class MotorizzazioneResponseDTO {
     private Integer cilindrataCC;
 
     // ── Consumi ───────────────────────────────────────────────────────────────
-    private Double consumoMedioLitri100km;
+    private BigDecimal consumoMedioLitri100km;
     private Double consumoUrbanoLitri100km;
     private Double consumoExtraurbanoLitri100km;
     private Double autonomiaKmElettrica;
@@ -62,6 +65,9 @@ public class MotorizzazioneResponseDTO {
 
     // ── Metadati estrazione ───────────────────────────────────────────────────
     private String fonteDati;
+    private LocalDateTime dataEstrazione;
+    private Boolean confermatoManualmente;
+
 
     /**
      * Warning da mostrare all'utente quando l'anno richiesto non aveva
