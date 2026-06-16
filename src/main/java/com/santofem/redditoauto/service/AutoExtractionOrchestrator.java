@@ -271,6 +271,8 @@ public class AutoExtractionOrchestrator {
         log.info("[AI] Estratto: marca='{}' modello='{}' motore='{}' anno={} carburante='{}' kw={}",
             dto.marca(), dto.modello(), dto.nomeMotore(), dto.annoProduzione(),
             dto.tipoCarburante(), dto.potenzaKw());
+        log.info("[AI] DTO Completo estratto da Gemini: {}", dto);
+
 
         if (!dto.isValid()) {
             log.warn("[AI] Dati insufficienti - salvataggio bloccato. "

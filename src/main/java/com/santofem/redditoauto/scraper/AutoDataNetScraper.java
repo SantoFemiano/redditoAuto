@@ -15,14 +15,14 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Scraper per auto-data.net.
+ * Scraper PERFEZIONATO per auto-data.net.
  *
  * NAVIGAZIONE 4 LIVELLI:
  * 1) brand URL  (mappa statica + discovery via sitemap)
  * 2) /it/<marca>-brand-<id>  -> link /it/<marca>-<modello>-model-<id>
  * 3) /it/<marca>-<modello>-model-<id> -> link generazione (match anno)
  * 4) /it/<marca>-<gen>-generation-<id> -> link motorizzazione (scoring)
- * 5) Scheda tecnica -> testo tabelle
+ * 5) Scheda tecnica -> testo tabelle (Pulizia aggressiva per evitare dati misti)
  */
 @Component
 @Slf4j
@@ -30,80 +30,16 @@ public class AutoDataNetScraper {
 
     private static final String BASE = "https://www.auto-data.net";
 
-    // ══ MAPPA STATICA BRAND ID (verificati manualmente) ══════════════════════
+    // ══ MAPPA STATICA BRAND ID (verificati manualmente per performance) ══
     private static final Map<String, Integer> BRAND_IDS = new LinkedHashMap<>();
     static {
         BRAND_IDS.put("audi",          41);
         BRAND_IDS.put("volkswagen",    80);
-        BRAND_IDS.put("bmw",            3);
-        BRAND_IDS.put("mercedes",       5);
-        BRAND_IDS.put("mercedes-benz",  5);
-        BRAND_IDS.put("mercedes benz",  5);
-        BRAND_IDS.put("ford",          18);
-        BRAND_IDS.put("fiat",          17);
-        BRAND_IDS.put("alfa romeo",     1);
-        BRAND_IDS.put("alfaromeo",      1);
-        BRAND_IDS.put("opel",          50);
-        BRAND_IDS.put("peugeot",       53);
-        BRAND_IDS.put("renault",       57);
-        BRAND_IDS.put("citroen",       11);
-        BRAND_IDS.put("toyota",        74);
-        BRAND_IDS.put("honda",         24);
-        BRAND_IDS.put("nissan",        47);
-        BRAND_IDS.put("hyundai",       26);
-        BRAND_IDS.put("kia",           31);
-        BRAND_IDS.put("skoda",         65);
-        BRAND_IDS.put("seat",          63);
-        BRAND_IDS.put("porsche",       54);
-        BRAND_IDS.put("ferrari",       16);
-        BRAND_IDS.put("lamborghini",   33);
-        BRAND_IDS.put("maserati",      39);
-        BRAND_IDS.put("volvo",         81);
-        BRAND_IDS.put("subaru",        68);
-        BRAND_IDS.put("mazda",         40);
-        BRAND_IDS.put("mitsubishi",    44);
-        BRAND_IDS.put("suzuki",        70);
-        BRAND_IDS.put("dacia",         13);
-        BRAND_IDS.put("land rover",    34);
-        BRAND_IDS.put("landrover",     34);
-        BRAND_IDS.put("jeep",          29);
-        BRAND_IDS.put("mini",          43);
-        BRAND_IDS.put("lexus",         36);
-        BRAND_IDS.put("infiniti",      27);
-        BRAND_IDS.put("tesla",         72);
-        BRAND_IDS.put("jaguar",        28);
-        BRAND_IDS.put("lancia",        35);
-        BRAND_IDS.put("smart",         66);
-        BRAND_IDS.put("cupra",        116);
-        BRAND_IDS.put("mg",            42);
-        BRAND_IDS.put("ds",           117);
-        BRAND_IDS.put("genesis",      134);
-        BRAND_IDS.put("lynk co",      145);
-        BRAND_IDS.put("lynk & co",    145);
-        BRAND_IDS.put("polestar",     167);
-        BRAND_IDS.put("byd",          169);
-        BRAND_IDS.put("nio",          170);
-        BRAND_IDS.put("xpeng",        171);
-        BRAND_IDS.put("li",           172);
-        BRAND_IDS.put("rivian",       173);
-        BRAND_IDS.put("lucid",        174);
-        BRAND_IDS.put("mclaren",       41 + 200);
-        BRAND_IDS.put("aston martin",   2);
-        BRAND_IDS.put("astonmartin",    2);
-        BRAND_IDS.put("bentley",        8);
-        BRAND_IDS.put("rolls royce",   58);
-        BRAND_IDS.put("rollsroyce",    58);
-        BRAND_IDS.put("bugatti",        9);
-        BRAND_IDS.put("pagani",        51);
-        BRAND_IDS.put("koenigsegg",    32);
-        BRAND_IDS.put("dodge",         14);
-        BRAND_IDS.put("chevrolet",     10);
-        BRAND_IDS.put("cadillac",      10 + 100);
-        BRAND_IDS.put("chrysler",      10 + 100);
-        BRAND_IDS.put("ram",          130);
-        BRAND_IDS.put("lincoln",       37);
-        BRAND_IDS.put("buick",          9 + 100);
-        BRAND_IDS.put("acura",         41 + 300);
+        BRAND_IDS.put("bmw",            86);
+        BRAND_IDS.put("mercedes-benz",  138);
+        BRAND_IDS.put("ford",          72);
+        BRAND_IDS.put("fiat",          67);
+        BRAND_IDS.put("alfa romeo",     11);
     }
 
     private final Map<String, String> discoveredBrands = new ConcurrentHashMap<>();
@@ -120,6 +56,7 @@ public class AutoDataNetScraper {
             "mpi", "fsi", "gpl", "cng", "tce", "puretech", "bluehdi",
             "multijet", "dci", "vtec", "skyactiv"
     );
+
     private static final List<String> GEAR_TOKENS = List.of(
             "dsg", "dct", "cvt", "automatic", "automatico", "pdk",
             "s-tronic", "stronic", "xtronic", "tiptronic"
@@ -345,10 +282,6 @@ public class AutoDataNetScraper {
         return best;
     }
 
-    /**
-     * Ricava il prefisso url identificativo di questo specifico modello (es: "/it/audi-s3-").
-     * Ci proteggerà dall'estrarre link ad "audi-rs3" nelle sezioni "Modelli Correlati".
-     */
     private String extractModelPrefix(String modelUrl) {
         if (modelUrl == null) return null;
         Matcher m = Pattern.compile("/it/([^/]+)-model-\\d+").matcher(modelUrl);
@@ -376,7 +309,6 @@ public class AutoDataNetScraper {
             if (href.isEmpty()) continue;
 
             // --- FILTRO ANTI-CONTAMINAZIONE ---
-            // Assicura che la generazione appartenga strettamente al modello individuato (es S3 e non RS3)
             if (modelPrefix != null && !href.contains(modelPrefix)) {
                 continue;
             }
@@ -403,7 +335,6 @@ public class AutoDataNetScraper {
         }
 
         if (bestUrl != null) return new GenerazioneResult(bestUrl, bestAnnoEff, false);
-
         if (fallbackUrl != null) return new GenerazioneResult(fallbackUrl, fallbackAnno, true);
 
         return null;
@@ -455,7 +386,6 @@ public class AutoDataNetScraper {
             if (!name.isEmpty()) {
                 int cv = extractPower(rawName);
                 String cilindrata = extractDisplacement(rawName);
-
                 candidates.add(new LinkEntry(name, href, cv, cilindrata));
             }
         }
@@ -481,9 +411,6 @@ public class AutoDataNetScraper {
                     if (urlL.contains(ft) || nameL.contains(ft)) { fuelMatch = true; break; }
                 if (fuelMatch) score += 10;
                 else           score -= 5;
-            } else {
-                for (String ft : reqFuel)
-                    if (urlL.contains(ft) || nameL.contains(ft)) { score += 2; break; }
             }
 
             // --- Potenza CV ---
@@ -521,9 +448,6 @@ public class AutoDataNetScraper {
             if (!reqGear.isEmpty()) {
                 for (String gt : reqGear)
                     if (urlL.contains(gt) || nameL.contains(gt)) { score += 2; break; }
-            } else {
-                for (String gt : reqGear)
-                    if (urlL.contains(gt) || nameL.contains(gt)) { score += 1; break; }
             }
 
             log.debug("[AutoDataNet] Motor score={}: {} -> {}", score, nameL, c.url());
@@ -569,36 +493,51 @@ public class AutoDataNetScraper {
     }
 
     // ══════════════════════════════════════════════
-    //  LIVELLO 5 — SCHEDA TECNICA
+    //  LIVELLO 5 — SCHEDA TECNICA (PERFEZIONATO)
     // ══════════════════════════════════════════════
 
     private Optional<String> fetchSchedaTecnica(String url) throws IOException {
         Document doc = fetch(url);
-        doc.select("nav, header, footer, script, style, iframe, .ad970, .ads, .cookie").remove();
+
+        // 1. PULIZIA AGGRESSIVA STRUTTURALE
+        // Rimuoviamo tutto ciò che non fa parte dei dati del veicolo per evitare che Gemini
+        // legga dati spazzatura o pubblicità.
+        doc.select("nav, header, footer, script, style, iframe, .ad970, .ads, .cookie, noscript").remove();
+
+        // 2. RIMOZIONE DELLE "ALTRE AUTO" E "MODIFICHE SIMILI"
+        // auto-data.net aggiunge in fondo alla pagina tabelle con le auto della stessa
+        // generazione o i modelli precedenti. Gemini si confonde facilmente e mischia i dati.
+        doc.select("a[href*=-model-], a[href*=-generation-], .breadcrumb").remove();
+        doc.select("table a").remove(); // Polverizza i link nelle tabelle ("Altre versioni")
 
         StringBuilder sb = new StringBuilder();
         sb.append("[FONTE: ").append(url).append("]\n");
         sb.append(doc.title()).append("\n\n");
 
+        // 3. ESTRAZIONE MIRATA (Solo le tabelle delle specifiche pulite)
         for (Element table : doc.select("table")) {
             for (Element row : table.select("tr")) {
                 Elements cells = row.select("td, th");
                 if (cells.size() >= 2) {
                     String label = cells.get(0).text().trim();
                     String value = cells.get(1).text().trim();
-                    if (!label.isEmpty() && !value.isEmpty())
+
+                    // Condizione stringente: se la label è troppo lunga, probabilmente
+                    // è un blocco di testo descrittivo o spazzatura, lo ignoriamo.
+                    if (!label.isEmpty() && !value.isEmpty() && label.length() < 60) {
                         sb.append(label).append(": ").append(value).append("\n");
+                    }
                 }
             }
             sb.append("\n");
         }
 
-        if (sb.length() < 400) {
-            Element body = doc.body();
-            if (body != null) sb.append(body.text());
-        }
-
-        return sb.length() > 200 ? Optional.of(sb.toString()) : Optional.empty();
+        // 4. STOP AL FALLBACK SUL BODY
+        // Precedentemente veniva letto il body.text() se il testo era < 400.
+        // Questo era devastante perché portava dentro testo inutile e di altre auto.
+        // Ora esigiamo che ci siano almeno 100 caratteri di tabelle vere, altrimenti è vuoto.
+        String finalOutput = sb.toString().trim();
+        return finalOutput.length() > 100 ? Optional.of(finalOutput) : Optional.empty();
     }
 
     // ══════════════════════════════════════════════
