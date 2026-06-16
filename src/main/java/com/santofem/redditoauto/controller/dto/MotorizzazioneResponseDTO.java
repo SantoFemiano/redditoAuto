@@ -1,73 +1,72 @@
 package com.santofem.redditoauto.controller.dto;
 
-import lombok.*;
-
-import java.math.BigDecimal;
-import java.time.LocalDateTime;
+import com.fasterxml.jackson.annotation.JsonInclude;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
 
 /**
- * DTO di risposta REST per una Motorizzazione.
+ * DTO di risposta per l'estrazione dati auto.
  *
- * Usato da:
- * - CarDataMapper.toResponseDTO(Motorizzazione) per costruire la risposta
- * - MotorizzazioneController (blocco 10) per gli endpoint di ricerca/autocomplete
- *
- * Gli enum (tipoCarburante, tipoCambio) sono esposti come String
- * per semplicita' di serializzazione JSON verso il frontend Angular.
- *
- * Il campo warningAnno è popolato quando l'anno richiesto non aveva
- * una scheda corrispondente e si è usata la generazione più recente disponibile.
+ * Contiene:
+ * - I dati tecnici della motorizzazione estratti dall'AI
+ * - Metadati dell'estrazione (fonte, warning anno)
+ * - Prezzo e fonte scraping (popolati solo se estratti via /estrai-url)
  */
-@Getter
-@Setter
+@Data
+@Builder
 @NoArgsConstructor
 @AllArgsConstructor
-@Builder
+@JsonInclude(JsonInclude.Include.NON_NULL)
 public class MotorizzazioneResponseDTO {
 
-    // --- IDENTIFICAZIONE ---
-    private Long    id;
-    private String  marca;
-    private String  modello;
-    private String  nomeMotore;       // es. "2.0 TDI 150 CV DSG"
-    private Integer annoProduzione;
+    // ── Identità veicolo ─────────────────────────────────────────────────────
+    private Long   id;
+    private String marca;
+    private String modello;
+    private String nomeMotore;
+    private int    annoProduzione;
 
-    // --- MOTORE ---
-    private String  tipoCarburante;   // es. "DIESEL" (enum.name())
-    private String  tipoCambio;       // es. "DCT"
-    private Integer potenzaKw;
+    // ── Motorizzazione ────────────────────────────────────────────────────────
+    private String  tipoCarburante;
+    private String  tipoCambio;
+    private Double  potenzaKw;
     private Integer potenzaCv;
     private Integer cilindrataCC;
 
-    // --- CONSUMI ---
-    private BigDecimal consumoMedioLitri100km;
-    private BigDecimal consumoUrbanoLitri100km;
-    private BigDecimal consumoExtraurbanoLitri100km;
-    private Integer    autonomiaKmElettrica;
+    // ── Consumi ───────────────────────────────────────────────────────────────
+    private Double consumoMedioLitri100km;
+    private Double consumoUrbanoLitri100km;
+    private Double consumoExtraurbanoLitri100km;
+    private Double autonomiaKmElettrica;
 
-    // --- PNEUMATICI ---
+    // ── Pneumatici ────────────────────────────────────────────────────────────
     private String  misuraPneumaticiAnteriori;
     private String  misuraPneumaticiPosteriori;
     private Boolean runFlat;
 
-    // --- COSTI ---
-    private BigDecimal prezzoListinoEur;
-    private BigDecimal costoTagliandoBaseEur;
-    private BigDecimal costoTagliandoMaiorEur;
-    private Integer    intervalloTagliandoKm;
-    private Integer    intervalloTagliandoMaiorKm;
-    private Integer    gruppoAssicurativo;
+    // ── Costi ─────────────────────────────────────────────────────────────────
+    private Double  costoTagliandoBaseEur;
+    private Double  costoTagliandoMaiorEur;
+    private Integer intervalloTagliandoKm;
+    private Integer intervalloTagliandoMaiorKm;
+    private Integer gruppoAssicurativo;
 
-    // --- METADATA ---
-    private String        fonteDati;
-    private LocalDateTime dataEstrazione;
-    private Boolean       confermatoManualmente;
+    // ── Prezzo (popolato solo da /estrai-url con siti che lo espongono) ───────
+    /** Prezzo di listino in EUR trovato dallo scraper. Null se non disponibile. */
+    private Double  prezzoListinoEur;
+
+    /** Nome del sito da cui è stato estratto il prezzo. Null se non disponibile. */
+    private String  fonteScraping;
+
+    // ── Metadati estrazione ───────────────────────────────────────────────────
+    private String fonteDati;
 
     /**
-     * Avviso all'utente quando l'anno richiesto non era disponibile
-     * e si è usata la generazione più vicina.
-     * Null se non c'è nessun mismatch di anno.
-     * Esempio: "Dati non disponibili per il 2025. Mostro la versione 2024."
+     * Warning da mostrare all'utente quando l'anno richiesto non aveva
+     * una scheda tecnica disponibile e si è usato un anno alternativo.
+     * Null se non applicabile.
      */
     private String warningAnno;
 }

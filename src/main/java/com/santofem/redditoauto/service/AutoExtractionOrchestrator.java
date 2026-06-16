@@ -12,7 +12,9 @@ import com.santofem.redditoauto.mapper.CarDataMapper;
 import com.santofem.redditoauto.repository.MarcaRepository;
 import com.santofem.redditoauto.repository.ModelloRepository;
 import com.santofem.redditoauto.repository.MotorizzazioneRepository;
+import com.santofem.redditoauto.scraper.MultiSiteScraperResult;
 import com.santofem.redditoauto.scraper.ScraperResult;
+import com.santofem.redditoauto.scraper.UrlScraperDispatcher;
 import com.santofem.redditoauto.scraper.WebScraper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -28,11 +30,14 @@ import java.util.function.Supplier;
 @Slf4j
 public class AutoExtractionOrchestrator {
 
-    /** Numero massimo di caratteri del testo scraping inviato a Gemini.
-     *  Valori più alti aumentano il rischio di output token troncati (MalformedJsonException). */
+    /**
+     * Numero massimo di caratteri del testo scraping inviato a Gemini.
+     * Valori più alti aumentano il rischio di output token troncati (MalformedJsonException).
+     */
     private static final int MAX_SCRAPING_CHARS = 4500;
 
     private final WebScraper webScraper;
+    private final UrlScraperDispatcher urlScraperDispatcher;
     private final AiCarDataExtractor aiExtractor;
     private final AiDirectDataProvider aiDirectProvider;
     private final CarDataMapper carDataMapper;
@@ -88,7 +93,6 @@ public class AutoExtractionOrchestrator {
         String warningAnno = null;
 
         if (scraperResult.hasText()) {
-            // Usa l'anno EFFETTIVO trovato dallo scraper (non quello richiesto dall'utente)
             int annoEffettivo = scraperResult.annoEffettivo();
             warningAnno = scraperResult.buildWarningAnno();
 
@@ -97,10 +101,7 @@ public class AutoExtractionOrchestrator {
                     anno, annoEffettivo);
             }
 
-            // Tronca il testo per evitare che Gemini superi il limite di output token
-            // e produca JSON troncato (MalformedJsonException su $.nomeMotore e simili)
             String testoScraping = truncaTestoScraping(scraperResult.testo());
-
             log.info("[Orchestratore] Scraping riuscito ({} chars → {} chars dopo troncamento), invio all'AI extractor",
                 scraperResult.testo().length(), testoScraping.length());
             CarDataDTO raw = callAiSafely(() -> aiExtractor.extractCarData(
@@ -117,7 +118,6 @@ public class AutoExtractionOrchestrator {
         }
 
         MotorizzazioneResponseDTO response = persistiDto(dto, fonteDati);
-        // Propaga il warning anno al frontend
         if (warningAnno != null) {
             response.setWarningAnno(warningAnno);
             log.info("[Orchestratore] Warning anno propagato: {}", warningAnno);
@@ -135,18 +135,64 @@ public class AutoExtractionOrchestrator {
     }
 
     // -----------------------------------------------
-    // ENDPOINT: /estrai-url
+    // ENDPOINT: /estrai-url  (ora passa per il Dispatcher multi-site)
     // -----------------------------------------------
 
+    /**
+     * Estrae i dati tecnici da un URL diretto.
+     *
+     * Il flusso è:
+     * 1. UrlScraperDispatcher riconosce il sito e delega allo scraper specializzato
+     * 2. Lo scraper restituisce testo tecnico + prezzo (se disponibile) + hint identità
+     * 3. Gli hint vengono usati per guidare Gemini nell'estrazione strutturata
+     * 4. Se il prezzo è stato trovato dallo scraper, viene propagato nel DTO di risposta
+     *    sovrascrivendo l'eventuale prezzo estratto dall'AI (più affidabile perché è un
+     *    valore numerico già parsato, non un'inferenza del modello)
+     */
     @Transactional
-    public MotorizzazioneResponseDTO estraiDaUrl(String url, String fonteDati) {
+    public MotorizzazioneResponseDTO estraiDaUrl(String url, String fonteDatiInput) {
         log.info("[Orchestratore] Estrazione da URL: {}", url);
-        String testo = webScraper.scrapeUrl(url)
-            .orElseThrow(() ->
-                new IllegalStateException("Impossibile estrarre testo dall'URL: " + url));
+
+        // 1. Dispatching al sito corretto
+        MultiSiteScraperResult scraped = urlScraperDispatcher.dispatch(url);
+
+        if (!scraped.hasTesto()) {
+            log.error("[Orchestratore] Nessun testo estratto dall'URL: {}", url);
+            throw new IllegalStateException("Impossibile estrarre testo dall'URL: " + url);
+        }
+
+        // 2. Costruisce il contesto di hint per guidare l'AI
+        String marca   = scraped.getMarcaHint()   != null ? scraped.getMarcaHint()   : "sconosciuta";
+        String modello = scraped.getModelloHint() != null ? scraped.getModelloHint() : "sconosciuto";
+        String annoStr = scraped.getAnnoHint()    > 0     ? String.valueOf(scraped.getAnnoHint()) : "0";
+
+        log.info("[Orchestratore] URL scraping riuscito da '{}': {} chars, prezzo={} EUR, hint: {} {} {}",
+                scraped.getSiteNome(), scraped.getTesto().length(),
+                scraped.getPrezzoEur(), marca, modello, annoStr);
+
+        // 3. Tronca il testo per evitare JSON troncato da Gemini
+        String testoScraping = truncaTestoScraping(scraped.getTesto());
+
+        // 4. Estrazione AI guidata dagli hint identità
         CarDataDTO dto = callAiSafely(() -> aiExtractor.extractCarData(
-            "sconosciuta", "sconosciuto", "sconosciuto", "0", truncaTestoScraping(testo)));
-        return persistiDto(dto, fonteDati);
+                marca, modello, "sconosciuto", annoStr, testoScraping));
+
+        // 5. Fonte dati reale dal sito riconosciuto
+        String fonteDati = "scraping:" + scraped.getSiteNome() + ":" + url;
+
+        // 6. Persisti e ottieni il DTO di risposta
+        MotorizzazioneResponseDTO response = persistiDto(dto, fonteDati);
+
+        // 7. Propaga il prezzo trovato dallo scraper (più affidabile dell'AI)
+        //    Solo se il prezzo è presente e nel range plausibile per un'auto
+        if (scraped.hasPrezzo() && scraped.getPrezzoEur() >= 1000) {
+            log.info("[Orchestratore] Prezzo scraper ({} EUR, tipo={}) propagato nella risposta",
+                    scraped.getPrezzoEur(), scraped.getTipoPrezzo());
+            response.setPrezzoListinoEur(scraped.getPrezzoEur());
+            response.setFonteScraping(scraped.getSiteNome());
+        }
+
+        return response;
     }
 
     // -----------------------------------------------
@@ -179,27 +225,14 @@ public class AutoExtractionOrchestrator {
         }
 
         return new CarDataDTO(
-            marca,
-            modello,
-            motore,
-            anno,
-            raw.tipoCarburante(),
-            raw.tipoCambio(),
-            raw.potenzaKw(),
-            raw.potenzaCv(),
-            raw.cilindrataCC(),
-            raw.consumoMedioLitri100km(),
-            raw.consumoUrbanoLitri100km(),
-            raw.consumoExtraurbanoLitri100km(),
+            marca, modello, motore, anno,
+            raw.tipoCarburante(), raw.tipoCambio(),
+            raw.potenzaKw(), raw.potenzaCv(), raw.cilindrataCC(),
+            raw.consumoMedioLitri100km(), raw.consumoUrbanoLitri100km(), raw.consumoExtraurbanoLitri100km(),
             raw.autonomiaKmElettrica(),
-            raw.misuraPneumaticiAnteriori(),
-            raw.misuraPneumaticiPosteriori(),
-            raw.runFlat(),
-            raw.prezzoListinoEur(),
-            raw.costoTagliandoBaseEur(),
-            raw.costoTagliandoMaiorEur(),
-            raw.intervalloTagliandoKm(),
-            raw.intervalloTagliandoMaiorKm(),
+            raw.misuraPneumaticiAnteriori(), raw.misuraPneumaticiPosteriori(), raw.runFlat(),
+            raw.prezzoListinoEur(), raw.costoTagliandoBaseEur(), raw.costoTagliandoMaiorEur(),
+            raw.intervalloTagliandoKm(), raw.intervalloTagliandoMaiorKm(),
             raw.gruppoAssicurativo()
         );
     }
@@ -215,17 +248,6 @@ public class AutoExtractionOrchestrator {
     // TRONCAMENTO TESTO SCRAPING
     // -----------------------------------------------
 
-    /**
-     * Tronca il testo di scraping a {@link #MAX_SCRAPING_CHARS} caratteri.
-     * <p>
-     * Motivazione: Gemini ha un limite sul numero di token di output. Se il prompt
-     * (testo scraping + istruzioni) è troppo lungo, il modello raggiunge il limite
-     * prima di chiudere il JSON, producendo un {@code MalformedJsonException}
-     * del tipo "Unterminated string at path $.nomeMotore".
-     * Il testo di auto-data.net contiene già tutti i dati tecnici rilevanti
-     * nelle prime sezioni, quindi il troncamento non causa perdita di informazioni.
-     * </p>
-     */
     private String truncaTestoScraping(String testo) {
         if (testo == null) return "";
         if (testo.length() <= MAX_SCRAPING_CHARS) return testo;
@@ -248,9 +270,6 @@ public class AutoExtractionOrchestrator {
                 throw new GeminiUnavailableException(
                     "Il servizio AI e' temporaneamente sovraccarico. Riprova tra qualche secondo.", ex);
             }
-            // MalformedJsonException: Gemini ha restituito JSON troncato.
-            // Segnala il problema con un messaggio chiaro invece di propagare
-            // un JsonSyntaxException incomprensibile al chiamante.
             if (msg.contains("MalformedJson") || msg.contains("Unterminated string")
                     || msg.contains("JsonSyntaxException") || msg.contains("JsonParseException")) {
                 log.error("[AI] Gemini ha restituito JSON malformato/troncato: {}", msg);
@@ -271,8 +290,6 @@ public class AutoExtractionOrchestrator {
         log.info("[AI] Estratto: marca='{}' modello='{}' motore='{}' anno={} carburante='{}' kw={}",
             dto.marca(), dto.modello(), dto.nomeMotore(), dto.annoProduzione(),
             dto.tipoCarburante(), dto.potenzaKw());
-        log.info("[AI] DTO Completo estratto da Gemini: {}", dto);
-
 
         if (!dto.isValid()) {
             log.warn("[AI] Dati insufficienti - salvataggio bloccato. "
