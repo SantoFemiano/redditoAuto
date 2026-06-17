@@ -29,6 +29,12 @@ import java.util.regex.Pattern;
 public class AutoDataNetScraper {
 
     private static final String BASE = "https://www.auto-data.net";
+    // Pattern esatti basati sulla struttura di auto-data.net
+    private static final Pattern PATTERN_BRAND = Pattern.compile(".*-brand-\\d+");
+    private static final Pattern PATTERN_MODEL = Pattern.compile(".*-model-\\d+");
+    private static final Pattern PATTERN_GENERATION = Pattern.compile(".*-generation-\\d+");
+    // L'auto finale non ha keyword specifiche prima dell'ID, ma termina con un numero
+    private static final Pattern PATTERN_VEHICLE = Pattern.compile(".*-\\d+$");
 
     // ══ MAPPA STATICA BRAND ID (verificati manualmente per performance) ══
     // ══ MAPPA STATICA BRAND ID (ESTRATTA DA ALLBRANDS) ══════════════════════
@@ -612,57 +618,77 @@ public class AutoDataNetScraper {
         return bestModelMatch(normalize(modello), candidates);
     }
 
+// ══════════════════════════════════════════════
+    //  SCORING INTELLIGENTE DEL MODELLO
+    // ══════════════════════════════════════════════
+
     private String bestModelMatch(String modello, List<LinkEntry> candidates) {
         if (candidates.isEmpty()) return null;
-        String mNorm    = modello.replace("-", " ").trim();
+        String mNorm    = normalize(modello).trim();
         String mCompact = mNorm.replace(" ", "");
 
-        for (LinkEntry c : candidates)
-            if (c.name().replace("-", " ").equals(mNorm)) return c.url();
-
-        for (LinkEntry c : candidates)
-            if (c.name().replace("-", " ").replace(" ", "").equals(mCompact)) return c.url();
-
-        String[] tokens = mNorm.split("\\s+");
-
+        // 1. Match Esatto (Priorità assoluta)
         for (LinkEntry c : candidates) {
-            String cn = c.name().replace("-", " ");
-            List<String> cnTokens = Arrays.asList(cn.split("\\s+"));
-            boolean allMatch = true;
-            for (String t : tokens) {
-                if (!cnTokens.contains(t)) { allMatch = false; break; }
-            }
-            if (allMatch) return c.url();
+            if (c.name().equals(mNorm)) return c.url();
         }
 
-        String best = null;
-        int bestScore = 0;
+        // 2. Match compatto (es. "Serie 3" vs "Serie3")
+        for (LinkEntry c : candidates) {
+            if (c.name().replace(" ", "").equals(mCompact)) return c.url();
+        }
+
+        // Elenco delle parole relative a varianti di carrozzeria da scartare se non richieste esplicitamente
+        List<String> variantiIndesiderate = Arrays.asList(
+                "sedan", "variant", "cross", "cabriolet", "cabrio", "estate",
+                "touring", "sportback", "alltrack", "gti", "sw", "plus", "cc"
+        );
+
+        // 3. Assegnazione Punteggio (Se il match esatto fallisce)
+        String bestUrl = null;
+        int bestScore = -1000;
+        String[] tokens = mNorm.split("\\s+");
+        List<String> userTokensList = Arrays.asList(tokens);
 
         for (LinkEntry c : candidates) {
-            String cn = c.name().replace("-", " ");
+            String cn = c.name();
             List<String> cnTokens = Arrays.asList(cn.split("\\s+"));
-            String cnCompact = cn.replace(" ", "");
             int score = 0;
+            boolean containsAll = true;
 
             for (String t : tokens) {
-                if (t.length() >= 1) {
-                    if (cnTokens.contains(t)) score += 5;
-                    else if (cn.contains(t)) score += 1;
+                if (cnTokens.contains(t)) {
+                    score += 10;
+                } else if (cn.contains(t)) {
+                    score += 3;
+                } else {
+                    containsAll = false;
                 }
             }
 
-            int prefixLen = Math.min(3, mCompact.length());
-            if (cnCompact.startsWith(mCompact.substring(0, prefixLen))) score += 2;
+            if (containsAll) score += 20;
+
+            // --- NOVITÀ: PENALITÀ ANTI-VARIANTE ---
+            // Se il nome candidato contiene "sedan" ma tu non l'hai scritto, viene distrutto in classifica
+            for (String variant : variantiIndesiderate) {
+                if (cnTokens.contains(variant) && !userTokensList.contains(variant)) {
+                    score -= 50; // Penalità severissima
+                }
+            }
+
+            // Penalità per parole extra (per preferire i nomi corti e puliti)
+            int extraWords = cnTokens.size() - tokens.length;
+            if (extraWords > 0) {
+                score -= (extraWords * 3);
+            }
 
             if (score > bestScore) {
                 bestScore = score;
-                best = c.url();
+                bestUrl = c.url();
             }
         }
 
-        return best;
+        return bestUrl != null ? bestUrl : candidates.get(0).url();
     }
-
     private String extractModelPrefix(String modelUrl) {
         if (modelUrl == null) return null;
         Matcher m = Pattern.compile("/it/([^/]+)-model-\\d+").matcher(modelUrl);
@@ -682,25 +708,17 @@ public class AutoDataNetScraper {
         String bestUrl    = null;
         int    bestFrom   = Integer.MIN_VALUE;
         int    bestAnnoEff = anno;
+
         String fallbackUrl = null;
         int    fallbackAnno = anno;
+        int    minDiff = Integer.MAX_VALUE; // Memorizza la distanza di anni minima
 
         for (Element a : doc.select("a[href*=-generation-]")) {
             String href = absoluteHref(a);
             if (href.isEmpty()) continue;
 
-            // --- FILTRO ANTI-CONTAMINAZIONE ---
-            if (modelPrefix != null && !href.contains(modelPrefix)) {
-                continue;
-            }
-
-            if (fallbackUrl == null) {
-                fallbackUrl = href;
-                Element parent = a.closest("div, li, tr, td");
-                String ctx = (parent != null ? parent.text() : "") + " " + a.text();
-                int[] range = extractYearRange(ctx);
-                if (range != null) fallbackAnno = range[0];
-            }
+            // Filtro anti-contaminazione
+            if (modelPrefix != null && !href.contains(modelPrefix)) continue;
 
             Element parent = a.closest("div, li, tr, td");
             String ctx = (parent != null ? parent.text() : "") + " " + a.text();
@@ -708,10 +726,26 @@ public class AutoDataNetScraper {
             if (range == null) continue;
 
             int from = range[0], to = range[1];
+
+            // Match Perfetto: L'anno rientra nella generazione
             if (anno >= from && anno <= to && from > bestFrom) {
                 bestFrom    = from;
                 bestUrl     = href;
                 bestAnnoEff = anno;
+            }
+
+            // CALCOLO FALLBACK INTELLIGENTE (La vera correzione del bug)
+            // Calcola quanti anni di distanza ci sono tra l'anno cercato e questa generazione
+            int diffToFrom = Math.abs(anno - from);
+            int diffToTo = Math.abs(anno - to);
+            int currentDiff = Math.min(diffToFrom, diffToTo);
+
+            // Se non abbiamo ancora un match perfetto, teniamo in memoria la generazione più vicina
+            if (bestUrl == null && currentDiff < minDiff) {
+                minDiff = currentDiff;
+                fallbackUrl = href;
+                // Imposta come anno di fallback l'estremo più vicino a quello cercato
+                fallbackAnno = (anno < from) ? from : to;
             }
         }
 
@@ -720,7 +754,6 @@ public class AutoDataNetScraper {
 
         return null;
     }
-
     private int[] extractYearRange(String text) {
         List<Integer> years = new ArrayList<>();
         Matcher m = YEAR_PAT.matcher(text);
@@ -732,6 +765,18 @@ public class AutoDataNetScraper {
 
     // ══════════════════════════════════════════════
     //  LIVELLO 4 — MOTORIZZAZIONE
+    // ══════════════════════════════════════════════
+
+// ══════════════════════════════════════════════
+    //  LIVELLO 4 — MOTORIZZAZIONE (SCORING SEVERO)
+    // ══════════════════════════════════════════════
+
+// ══════════════════════════════════════════════
+    //  LIVELLO 4 — MOTORIZZAZIONE (ANTI-INTRUSO CILINDRATA)
+    // ══════════════════════════════════════════════
+
+// ══════════════════════════════════════════════
+    //  LIVELLO 4 — MOTORIZZAZIONE (ANTI-INTRUSO CILINDRATA)
     // ══════════════════════════════════════════════
 
     private String findMotorizzazioneUrl(
@@ -747,26 +792,27 @@ public class AutoDataNetScraper {
         List<String> reqFuel = buildFuelTokens(ml, tipoCarburanteUtente);
         List<String> reqGear = buildGearTokens(ml, tipoCambioUtente);
 
+        String[] userTokens = ml.split("\\s+");
+
         List<LinkEntry> candidates = new ArrayList<>();
         for (Element a : doc.select("a[href]")) {
             String href = absoluteHref(a);
             if (!isMotorUrl(href, genUrl)) continue;
 
-            // --- FILTRO ANTI-CONTAMINAZIONE ---
-            if (modelPrefix != null && !href.contains(modelPrefix)) {
-                continue;
-            }
+            if (modelPrefix != null && !href.contains(modelPrefix)) continue;
 
-            String rawName = a.text();
+            // --- NOVITÀ: ESTRARRE IL NOME DALL'URL E NON DAL TESTO HTML ---
+            // L'url è tipo: .../volkswagen-polo-iv-9n-1.4-tdi-75hp-8450
+            String urlSlug = href.substring(href.lastIndexOf("/") + 1); // Prende l'ultima parte
+            urlSlug = urlSlug.replaceAll("-\\d+$", ""); // Rimuove l'ID finale (es. -8450)
+
+            // Uniamo il testo visibile con le parole dell'URL per avere la certezza di trovare cilindrata e cavalli
+            String rawName = a.text() + " " + urlSlug.replace("-", " ");
             String name = normalize(rawName);
 
-            if (name.isEmpty()) {
-                name = normalize(href.replaceAll(".*/it/", "").replace("-", " ").replaceAll("\\d+$", "").trim());
-            }
-
             if (!name.isEmpty()) {
-                int cv = extractPower(rawName);
-                String cilindrata = extractDisplacement(rawName);
+                int cv = extractPower(name);
+                String cilindrata = extractDisplacement(name);
                 candidates.add(new LinkEntry(name, href, cv, cilindrata));
             }
         }
@@ -785,58 +831,79 @@ public class AutoDataNetScraper {
             String nameL = c.name();
             int score = 0;
 
-            // --- Carburante ---
+            // --- 1. MATCH DELLE PAROLE ---
+            int tokenMatches = 0;
+            for (String t : userTokens) {
+                if (t.length() > 1 && (nameL.contains(t) || urlL.contains(t))) {
+                    score += 10;
+                    tokenMatches++;
+                }
+            }
+            if (tokenMatches > 0 && tokenMatches == userTokens.length) {
+                score += 30;
+            }
+
+            // --- 2. CARBURANTE ---
             if (!reqFuel.isEmpty()) {
                 boolean fuelMatch = false;
                 for (String ft : reqFuel)
                     if (urlL.contains(ft) || nameL.contains(ft)) { fuelMatch = true; break; }
-                if (fuelMatch) score += 10;
-                else           score -= 5;
+
+                if (fuelMatch) {
+                    score += 20;
+                } else {
+                    score -= 40;
+                }
             }
 
-            // --- Potenza CV ---
+            // --- 3. POTENZA CV ---
             if (reqPower > 0) {
                 int candCv = c.cv();
-                if (candCv == 0) {
-                    Matcher hpMatcher = Pattern.compile("(\\d{2,4})hp").matcher(urlL);
-                    if (hpMatcher.find()) {
-                        try { candCv = Integer.parseInt(hpMatcher.group(1)); } catch (NumberFormatException ignored) {}
-                    }
-                }
-
                 if (candCv > 0) {
                     int diff = Math.abs(candCv - reqPower);
-                    if (diff == 0)        score += 15;
-                    else if (diff <= 10)  score += 10;
-                    else if (diff <= 20)  score += 5;
-                    else if (diff > 40)   score -= 20;
+                    if (diff == 0)        score += 30;
+                    else if (diff <= 5)   score += 10;
+                    else if (diff <= 15)  score += 0;
+                    else                  score -= 30;
                 } else if (nameL.contains(String.valueOf(reqPower))) {
-                    score += 3;
+                    score += 10;
                 }
             }
 
-            // --- Cilindrata ---
+            // --- 4. CILINDRATA (CON ANTI-INTRUSO SEVERISSIMO) ---
             if (reqDisp != null) {
-                String d = reqDisp.replace(",", ".");
-                if (c.cilindrata() != null && c.cilindrata().equals(d)) {
-                    score += 3;
-                } else if (urlL.contains(d) || nameL.contains(d)) {
-                    score += 1;
+                String reqD = reqDisp.replace(",", ".");
+                String candDisp = c.cilindrata();
+
+                if (candDisp != null) {
+                    if (candDisp.equals(reqD)) {
+                        score += 30;
+                    } else {
+                        score -= 80; // PENALITÀ ESTREMA: Cilindrata diversa scartata
+                    }
+                } else if (urlL.contains(reqD) || nameL.contains(reqD)) {
+                    score += 15;
+                } else {
+                    score -= 30;
                 }
             }
 
-            // --- Cambio ---
+            // --- 5. CAMBIO ---
             if (!reqGear.isEmpty()) {
                 for (String gt : reqGear)
-                    if (urlL.contains(gt) || nameL.contains(gt)) { score += 2; break; }
+                    if (urlL.contains(gt) || nameL.contains(gt)) { score += 10; break; }
             }
 
-            log.debug("[AutoDataNet] Motor score={}: {} -> {}", score, nameL, c.url());
-            if (score > bestScore) { bestScore = score; bestUrl = c.url(); }
+            log.debug("[AutoDataNet] Valutazione motore '{}' -> Score: {}", nameL, score);
+
+            if (score > bestScore) {
+                bestScore = score;
+                bestUrl = c.url();
+            }
         }
 
-        if (bestScore <= -10) {
-            log.warn("[AutoDataNet] Nessun motor con score accettabile (best={}), uso primo candidato", bestScore);
+        if (bestScore <= -20) {
+            log.warn("[AutoDataNet] Nessun motore con requisiti accettabili, uso il fallback di sicurezza");
             return candidates.get(0).url();
         }
 
@@ -873,55 +940,56 @@ public class AutoDataNetScraper {
         return ENDS_NUM.matcher(href).find();
     }
 
+
+// ══════════════════════════════════════════════
+    //  LIVELLO 5 — SCHEDA TECNICA (CHIRURGICO)
     // ══════════════════════════════════════════════
-    //  LIVELLO 5 — SCHEDA TECNICA (PERFEZIONATO)
+
+// ══════════════════════════════════════════════
+    //  LIVELLO 5 — SCHEDA TECNICA (CHIRURGICO MULTI-TABELLA)
     // ══════════════════════════════════════════════
 
     private Optional<String> fetchSchedaTecnica(String url) throws IOException {
         Document doc = fetch(url);
 
         // 1. PULIZIA AGGRESSIVA STRUTTURALE
-        // Rimuoviamo tutto ciò che non fa parte dei dati del veicolo per evitare che Gemini
-        // legga dati spazzatura o pubblicità.
         doc.select("nav, header, footer, script, style, iframe, .ad970, .ads, .cookie, noscript").remove();
-
-        // 2. RIMOZIONE DELLE "ALTRE AUTO" E "MODIFICHE SIMILI"
-        // auto-data.net aggiunge in fondo alla pagina tabelle con le auto della stessa
-        // generazione o i modelli precedenti. Gemini si confonde facilmente e mischia i dati.
-        doc.select("a[href*=-model-], a[href*=-generation-], .breadcrumb").remove();
-        doc.select("table a").remove(); // Polverizza i link nelle tabelle ("Altre versioni")
+        doc.select(".breadcrumb, .similar-cars, a[href*=-model-], a[href*=-generation-]").remove();
+        doc.select("table a").remove(); // Rimuove i link dentro le tabelle
 
         StringBuilder sb = new StringBuilder();
         sb.append("[FONTE: ").append(url).append("]\n");
-        sb.append(doc.title()).append("\n\n");
+        sb.append("TITOLO: ").append(doc.title()).append("\n\n");
 
-        // 3. ESTRAZIONE MIRATA (Solo le tabelle delle specifiche pulite)
-        for (Element table : doc.select("table")) {
+        // 2. ESTRAZIONE DI TUTTE LE TABELLE RIMASTE NEL DOM PULITO
+        Elements tabelleTecniche = doc.select("table");
+
+        for (Element table : tabelleTecniche) {
             for (Element row : table.select("tr")) {
-                Elements cells = row.select("td, th");
-                if (cells.size() >= 2) {
-                    String label = cells.get(0).text().trim();
-                    String value = cells.get(1).text().trim();
+                Elements th = row.select("th"); // Es. "Consumo di carburante"
+                Elements td = row.select("td"); // Es. "5.5 l/100km"
 
-                    // Condizione stringente: se la label è troppo lunga, probabilmente
-                    // è un blocco di testo descrittivo o spazzatura, lo ignoriamo.
+                // A volte le tabelle auto-data usano due <td> invece di th/td
+                if (th.isEmpty() && td.size() >= 2) {
+                    th = new Elements(td.get(0));
+                    td = new Elements(td.get(1));
+                }
+
+                if (!th.isEmpty() && !td.isEmpty()) {
+                    String label = th.text().trim();
+                    String value = td.text().trim();
+
+                    // Salviamo solo se le righe sono sensate (label corte)
                     if (!label.isEmpty() && !value.isEmpty() && label.length() < 60) {
                         sb.append(label).append(": ").append(value).append("\n");
                     }
                 }
             }
-            sb.append("\n");
         }
 
-        // 4. STOP AL FALLBACK SUL BODY
-        // Precedentemente veniva letto il body.text() se il testo era < 400.
-        // Questo era devastante perché portava dentro testo inutile e di altre auto.
-        // Ora esigiamo che ci siano almeno 100 caratteri di tabelle vere, altrimenti è vuoto.
         String finalOutput = sb.toString().trim();
         return finalOutput.length() > 100 ? Optional.of(finalOutput) : Optional.empty();
-    }
-
-    // ══════════════════════════════════════════════
+    }    // ══════════════════════════════════════════════
     //  UTILITY
     // ══════════════════════════════════════════════
 

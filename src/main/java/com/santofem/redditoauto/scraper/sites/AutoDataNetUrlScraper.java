@@ -55,6 +55,14 @@ public class AutoDataNetUrlScraper implements UrlScraperStrategy {
     @Override
     public MultiSiteScraperResult scrape(String url) {
         log.info("[AutoDataNetUrl] Scraping URL diretto: {}", url);
+
+        // 1. SCUDO DI PROTEZIONE: Verifichiamo che sia la scheda di una macchina
+        String tipoUrl = identificaTipoUrl(url);
+        if (!"VEHICLE".equals(tipoUrl)) {
+            log.warn("[AutoDataNetUrl] URL scartato perché non punta a un veicolo finale. Rilevato: {}", tipoUrl);
+            return MultiSiteScraperResult.empty(SITE_NAME, url);
+        }
+
         try {
             Document doc = Jsoup.connect(url)
                     .userAgent(userAgent)
@@ -66,9 +74,9 @@ public class AutoDataNetUrlScraper implements UrlScraperStrategy {
                     .referrer("https://www.auto-data.net/it/")
                     .get();
 
-            doc.select("nav, header, footer, script, style, iframe, .ad970, .ads, .cookie").remove();
-
+            // Sostituito con il nuovo metodo chirurgico
             String testo = estraiTabelleTecniche(doc, url);
+
             if (testo.isBlank() || testo.length() < 200) {
                 log.warn("[AutoDataNetUrl] Testo troppo corto o vuoto: {} chars", testo.length());
                 return MultiSiteScraperResult.empty(SITE_NAME, url);
@@ -95,34 +103,51 @@ public class AutoDataNetUrlScraper implements UrlScraperStrategy {
         }
     }
 
+    private String identificaTipoUrl(String url) {
+        if (url == null) return "UNKNOWN";
+        if (url.contains("-brand-")) return "BRAND";
+        if (url.contains("-model-")) return "MODEL";
+        if (url.contains("-generation-")) return "GENERATION";
+        // Se non ha i suffissi di navigazione ma termina con un numero, è un veicolo
+        if (url.matches(".*-\\d+/?$")) return "VEHICLE";
+        return "UNKNOWN";
+    }
+
     private String estraiTabelleTecniche(Document doc, String url) {
+        // Pulizia aggressiva del DOM prima di leggere
+        doc.select("nav, header, footer, script, style, iframe, .ad970, .ads, .cookie, noscript").remove();
+        // Rimuove i link in fondo alla pagina (es. "Altre auto di questa generazione") che confondono Gemini
+        doc.select(".breadcrumb, .similar-cars, a[href*=-model-], a[href*=-generation-]").remove();
+
         StringBuilder sb = new StringBuilder();
         sb.append("[FONTE: ").append(url).append("]\n");
-        sb.append(doc.title()).append("\n\n");
+        sb.append("TITOLO: ").append(doc.title()).append("\n\n");
 
-        for (Element table : doc.select("table")) {
-            for (Element row : table.select("tr")) {
+        // Cerca la tabella specifica delle specifiche tecniche
+        Elements tabelleTecniche = doc.select("table.cardetails, table.car-specs");
+        if (tabelleTecniche.isEmpty()) {
+            tabelleTecniche = doc.select("table"); // Fallback
+        }
+
+        if (!tabelleTecniche.isEmpty()) {
+            // Estrae SOLO dalla tabella principale per evitare contaminazioni
+            Element tabellaPrincipale = tabelleTecniche.first();
+            for (Element row : tabellaPrincipale.select("tr")) {
                 Elements cells = row.select("td, th");
                 if (cells.size() >= 2) {
                     String label = cells.get(0).text().trim();
                     String value = cells.get(1).text().trim();
-                    if (!label.isEmpty() && !value.isEmpty()) {
+
+                    // Condizione stringente: se la label è lunghissima, è testo spazzatura, lo ignoriamo
+                    if (!label.isEmpty() && !value.isEmpty() && label.length() < 60) {
                         sb.append(label).append(": ").append(value).append("\n");
                     }
                 }
             }
-            sb.append("\n");
         }
 
-        // Fallback: estrai testo da section principale
-        if (sb.length() < 400) {
-            Element main = doc.selectFirst("main, .content, #content, article");
-            if (main != null) sb.append(main.text());
-        }
-
-        return sb.toString();
+        return sb.toString().trim();
     }
-
     /**
      * Inferisce [marca, modello, anno] dal titolo della pagina.
      * Es. "Audi A3 Sportback 2020 1.4 TFSI 150hp | auto-data.net" → ["Audi", "A3 Sportback", "2020"]

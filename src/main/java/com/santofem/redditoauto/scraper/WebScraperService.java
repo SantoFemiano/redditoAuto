@@ -1,5 +1,6 @@
 package com.santofem.redditoauto.scraper;
 
+import com.santofem.redditoauto.scraper.sites.AutoDataNetUrlScraper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.jsoup.Jsoup;
@@ -25,6 +26,7 @@ import java.util.Set;
 public class WebScraperService implements WebScraper {
 
     private final AutoDataNetScraper autoDataNetScraper;
+    private final AutoDataNetUrlScraper  autoDataNetUrlScraper;
 
     @Value("${scraper.timeout-ms:8000}")
     private int timeoutMs;
@@ -58,6 +60,7 @@ public class WebScraperService implements WebScraper {
     public Optional<String> scrape(String marca, String modello, String motore, int anno) {
         log.info("[Scraper] Avvio ricerca per: {} {} {} {}", marca, modello, motore, anno);
 
+        // CORREZIONE: Usa autoDataNetScraper, non autoDataNetUrlScraper!
         Optional<String> result = autoDataNetScraper.scrape(marca, modello, motore, anno);
 
         if (result.isPresent()) {
@@ -71,7 +74,6 @@ public class WebScraperService implements WebScraper {
         log.warn("[Scraper] auto-data.net non ha trovato dati per: {} {} {}", marca, modello, motore);
         return Optional.empty();
     }
-
     /**
      * Variante arricchita che restituisce uno {@link ScraperResult} con anno effettivo
      * e flag di fallback. Delega ad AutoDataNetScraper e sanitizza il testo prima di restituirlo.
