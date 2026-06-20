@@ -82,6 +82,9 @@ public record CarDataDTO(
     @JsonPropertyDescription("true se i pneumatici sono di tipo run-flat, false altrimenti. null se non specificato.")
     Boolean runFlat,
 
+    @JsonPropertyDescription("Stima esatta in km della durata media di un set di pneumatici. Deve essere calcolata valutando la potenza in kW e le misure (se anteriori e posteriori sono diverse la durata si riduce perché non si possono invertire). Es. 25000 o 40000. null se impossibile stimare.")
+    Integer kmDurataPneumatici,
+
     @JsonPropertyDescription("Prezzo di listino ufficiale in euro come decimale, es. 32500.0. null se assente.")
     Double prezzoListinoEur,
 

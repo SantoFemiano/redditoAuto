@@ -1,12 +1,14 @@
 package com.santofem.redditoauto.entity;
 
-import com.santofem.redditoauto.entity.enums.TipoCarburante;
 import com.santofem.redditoauto.entity.enums.TipoCambio;
+import com.santofem.redditoauto.entity.enums.TipoCarburante;
 import jakarta.persistence.*;
 import lombok.*;
+import org.hibernate.proxy.HibernateProxy;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.Objects;
 
 @Entity
 @Table(
@@ -21,7 +23,6 @@ import java.time.LocalDateTime;
 @AllArgsConstructor
 @Builder
 @ToString(exclude = "modello")
-@EqualsAndHashCode(onlyExplicitlyIncluded = true)
 public class Motorizzazione {
 
     @Id
@@ -94,6 +95,9 @@ public class Motorizzazione {
     @Column(name = "run_flat", nullable = false)
     private Boolean runFlat = false;
 
+    @Column(name = "km_durata_pneumatici")
+    private Integer kmDurataPneumatici;
+
     // -------------------------
     // PREZZO LISTINO — BigDecimal per precisione monetaria
     // -------------------------
@@ -137,4 +141,20 @@ public class Motorizzazione {
     @Builder.Default
     @Column(name = "confermato_manualmente")
     private Boolean confermatoManualmente = false;
+
+    @Override
+    public final boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null) return false;
+        Class<?> oEffectiveClass = o instanceof HibernateProxy ? ((HibernateProxy) o).getHibernateLazyInitializer().getPersistentClass() : o.getClass();
+        Class<?> thisEffectiveClass = this instanceof HibernateProxy ? ((HibernateProxy) this).getHibernateLazyInitializer().getPersistentClass() : this.getClass();
+        if (thisEffectiveClass != oEffectiveClass) return false;
+        Motorizzazione that = (Motorizzazione) o;
+        return getId() != null && Objects.equals(getId(), that.getId());
+    }
+
+    @Override
+    public final int hashCode() {
+        return this instanceof HibernateProxy ? ((HibernateProxy) this).getHibernateLazyInitializer().getPersistentClass().hashCode() : getClass().hashCode();
+    }
 }

@@ -12,7 +12,11 @@ import java.util.Optional;
 @Repository
 public interface MotorizzazioneRepository extends JpaRepository<Motorizzazione, Long> {
 
-    List<Motorizzazione> findByModelloId(Long modelloId);
+
+
+    @Query("SELECT m FROM Motorizzazione m JOIN FETCH m.modello WHERE m.id = :id")
+    Optional<Motorizzazione> findByModelloId(@Param("id") Long id);
+
 
     /**
      * Ricerca per marca + modello + anno: utile per verificare
@@ -27,12 +31,12 @@ public interface MotorizzazioneRepository extends JpaRepository<Motorizzazione, 
           AND m.annoProduzione = :anno
         """)
     List<Motorizzazione> findByMarcaModelloAnno(
-        @Param("marca") String marca,
-        @Param("modello") String modello,
-        @Param("anno") Integer anno
+            @Param("marca") String marca,
+            @Param("modello") String modello,
+            @Param("anno") Integer anno
     );
 
     Optional<Motorizzazione> findByModelloIdAndNomeMotoreIgnoreCaseAndAnnoProduzione(
-        Long modelloId, String nomeMotore, Integer annoProduzione
+            Long modelloId, String nomeMotore, Integer annoProduzione
     );
 }

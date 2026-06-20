@@ -28,6 +28,20 @@ public class CalcoloRequestDTO {
     @NotNull(message = "L'id della motorizzazione è obbligatorio")
     private Long motorizzazioneId;
 
+    private Boolean isAutoUsata;
+    private BigDecimal prezzoAutoUsata;
+
+    @AssertTrue(message = "Se l'auto è usata, il prezzo dell'auto usata non può essere null")
+    private boolean isPrezzoAutoUsataValid() {
+        // Se isAutoUsata è true, il prezzo DEVE essere diverso da null.
+        // In tutti gli altri casi (false o null), la validazione passa.
+        if (Boolean.TRUE.equals(isAutoUsata)) {
+            return prezzoAutoUsata != null;
+        }
+        return true;
+    }
+
+
     // --- FINANZIAMENTO ---
 
     /** Acconto versato dall'utente (può essere 0). */

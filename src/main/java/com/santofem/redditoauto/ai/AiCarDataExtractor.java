@@ -34,6 +34,7 @@ public interface AiCarDataExtractor {
            - intervalloTagliandoKm: es. 15000, 20000 o 30000.
            - intervalloTagliandoMaiorKm: es. 60000, 90000 o 120000.
            - gruppoAssicurativo: una stima (da 1 a 20).
+           - kmDurataPneumatici: stima in km della vita utile di un set di gomme. Calcolala rigorosamente valutando la potenzaKw (più è alta, minore è la durata) e le misure (se diverse tra assi, penalizza la durata).
            NON restituire MAI 0 o null per questi campi, fai la tua migliore stima di mercato!
         
         REGOLE ANTI-ALLUCINAZIONE:

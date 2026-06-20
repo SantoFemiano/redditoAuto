@@ -231,8 +231,8 @@ public class AutoExtractionOrchestrator {
             raw.consumoMedioLitri100km(), raw.consumoUrbanoLitri100km(), raw.consumoExtraurbanoLitri100km(),
             raw.autonomiaKmElettrica(),
             raw.misuraPneumaticiAnteriori(), raw.misuraPneumaticiPosteriori(), raw.runFlat(),
-            raw.prezzoListinoEur(), raw.costoTagliandoBaseEur(), raw.costoTagliandoMaiorEur(),
-            raw.intervalloTagliandoKm(), raw.intervalloTagliandoMaiorKm(),
+            raw.kmDurataPneumatici(), raw.prezzoListinoEur(), raw.costoTagliandoBaseEur(), raw.costoTagliandoMaiorEur()
+            ,raw.intervalloTagliandoKm(), raw.intervalloTagliandoMaiorKm(),
             raw.gruppoAssicurativo()
         );
     }

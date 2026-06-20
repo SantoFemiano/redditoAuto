@@ -9,6 +9,7 @@ import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.math.MathContext;
@@ -70,6 +71,7 @@ public class CalcoloSostenibilitaService {
     // ENTRY POINT PUBBLICO
     // =============================================================
 
+    @Transactional(readOnly = true)
     public CalcoloRispostaDTO calcola(CalcoloRequestDTO request) {
 
         Motorizzazione m = motorizzazioneRepository.findById(request.getMotorizzazioneId())
@@ -81,7 +83,14 @@ public class CalcoloSostenibilitaService {
                 .divide(BigDecimal.valueOf(100), 10, RoundingMode.HALF_UP);
 
         // FIX: prezzoListinoEur ora è BigDecimal nell'entity — nessun Double intermedio
-        BigDecimal prezzoAuto   = nvl(m.getPrezzoListinoEur(), BigDecimal.ZERO);
+        boolean autousata= request.getIsAutoUsata();
+        BigDecimal prezzoAuto;
+        if(autousata){
+             prezzoAuto = request.getPrezzoAutoUsata();
+        }
+        else{
+             prezzoAuto = nvl(m.getPrezzoListinoEur(), BigDecimal.ZERO);
+        }
         BigDecimal anticipo     = request.getAcconto();
         BigDecimal prezzoFinanz = prezzoAuto.subtract(anticipo).max(BigDecimal.ZERO);
 
@@ -96,7 +105,7 @@ public class CalcoloSostenibilitaService {
         BigDecimal costoTotaleFinanz = rata.multiply(BigDecimal.valueOf(durata))
                 .setScale(2, RoundingMode.HALF_UP);
         BigDecimal costoCarb         = calcolaCostoCarburanteMensile(m, kmMensili, prezzoCarb);
-        BigDecimal costoPneum        = calcolaCostoPneumaticiMensile(m);
+        BigDecimal costoPneum        = calcolaCostoPneumaticiMensile(m, kmMensili);
         BigDecimal[] tagliandi       = calcolaCostoTagliandiMensile(m, kmMensili);
         BigDecimal bolloMensile      = calcolaBolloMensile(m);
         BigDecimal assicMensile      = calcolaAssicurazioneMensile(request, m);
@@ -216,10 +225,18 @@ public class CalcoloSostenibilitaService {
     // =============================================================
     // COSTO PNEUMATICI MENSILE
     // =============================================================
-    private BigDecimal calcolaCostoPneumaticiMensile(Motorizzazione m) {
+    private BigDecimal calcolaCostoPneumaticiMensile(Motorizzazione m, int kmMensili) {
         BigDecimal costoSet = Boolean.TRUE.equals(m.getRunFlat())
                 ? PNEUMATICI_RUNFLAT : PNEUMATICI_STANDARD;
-        return costoSet.divide(BigDecimal.valueOf(PNEUMATICI_MESI), 2, RoundingMode.HALF_UP);
+
+        // Se per qualche motivo l'AI fallisce la stima, usiamo un fallback di 35.000 km
+        int durataKm = m.getKmDurataPneumatici() != null ? m.getKmDurataPneumatici() : 35000;
+
+        // Costo per singolo KM = Costo Set / Durata Set
+        // Costo Mensile = Costo per KM * Km Mensili
+        return costoSet
+                .multiply(BigDecimal.valueOf(kmMensili))
+                .divide(BigDecimal.valueOf(durataKm), 2, RoundingMode.HALF_UP);
     }
 
     // =============================================================

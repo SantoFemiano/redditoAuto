@@ -48,6 +48,7 @@ public class MotorizzazioneResponseDTO {
     private String  misuraPneumaticiAnteriori;
     private String  misuraPneumaticiPosteriori;
     private Boolean runFlat;
+    private Integer kmDurataPneumatici;
 
     // ── Costi ─────────────────────────────────────────────────────────────────
     private Double  costoTagliandoBaseEur;
