@@ -39,6 +39,11 @@ public class InfoController {
         return ResponseEntity.ok(getInfo.getModelsByBrand(brand));
     }
 
+    @GetMapping("/models/engines/{model}")
+    public ResponseEntity<List<String>> getEnginesByModel(@PathVariable String model){
+        return ResponseEntity.ok(getInfo.getEnginesByModel(model));
+    }
+
 
 
 }

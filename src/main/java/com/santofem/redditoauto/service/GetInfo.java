@@ -31,11 +31,25 @@ public class GetInfo {
         return motorizzazioneRepository.findAll().stream().map(Motorizzazione::getNomeMotore).toList();
     }
 
-    public List<Modello> getModelsByBrand(String brand) {
-        String marca = marcaRepository.findByNomeIgnoreCase(brand).get();
-        return modelloRepository.findByBrand(marca);
-
+    public List<String> getModelsByBrand(String brand){
+    Long brandId = marcaRepository.findByNome(brand);
+     if(brandId == null){
+         throw new RuntimeException("Brand non disponibile");
+     }
+     return modelloRepository.findAllByMarcaId(brandId).stream().map(Modello::getNome).toList();
     }
+
+    public List<String> getEnginesByModel(String model){
+        Long modelId = modelloRepository.findByNome(model);
+        if(modelId == null){
+        throw new RuntimeException("Modello non disponibile");}
+
+        return motorizzazioneRepository.findAllByModelloId(modelId).stream().map(Motorizzazione::getNomeMotore).toList();
+    }
+
+
+
+
 
 
 }

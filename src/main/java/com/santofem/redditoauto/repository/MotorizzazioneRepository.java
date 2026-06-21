@@ -36,7 +36,8 @@ public interface MotorizzazioneRepository extends JpaRepository<Motorizzazione, 
             @Param("anno") Integer anno
     );
 
-    Optional<Motorizzazione> findByModelloIdAndNomeMotoreIgnoreCaseAndAnnoProduzione(
-            Long modelloId, String nomeMotore, Integer annoProduzione
-    );
+
+
+    @Query("SELECT m FROM Motorizzazione m JOIN FETCH m.modello WHERE m.modello.id = :modelloId")
+    List<Motorizzazione> findAllByModelloId(@Param("modelloId") Long modelloId);
 }
