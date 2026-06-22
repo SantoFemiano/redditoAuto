@@ -687,7 +687,7 @@ public class AutoDataNetScraper {
             }
         }
 
-        return bestUrl != null ? bestUrl : candidates.get(0).url();
+        return bestUrl != null ? bestUrl : candidates.getFirst().url();
     }
     private String extractModelPrefix(String modelUrl) {
         if (modelUrl == null) return null;
@@ -760,23 +760,11 @@ public class AutoDataNetScraper {
         while (m.find()) years.add(Integer.parseInt(m.group()));
         if (years.isEmpty()) return null;
         Collections.sort(years);
-        return new int[]{ years.get(0), years.size() > 1 ? years.get(years.size() - 1) : 2099 };
+        return new int[]{ years.getFirst(), years.size() > 1 ? years.getLast() : 2099 };
     }
 
-    // ══════════════════════════════════════════════
+// ══════════════════════════════════════════════
     //  LIVELLO 4 — MOTORIZZAZIONE
-    // ══════════════════════════════════════════════
-
-// ══════════════════════════════════════════════
-    //  LIVELLO 4 — MOTORIZZAZIONE (SCORING SEVERO)
-    // ══════════════════════════════════════════════
-
-// ══════════════════════════════════════════════
-    //  LIVELLO 4 — MOTORIZZAZIONE (ANTI-INTRUSO CILINDRATA)
-    // ══════════════════════════════════════════════
-
-// ══════════════════════════════════════════════
-    //  LIVELLO 4 — MOTORIZZAZIONE (ANTI-INTRUSO CILINDRATA)
     // ══════════════════════════════════════════════
 
     private String findMotorizzazioneUrl(
@@ -904,10 +892,10 @@ public class AutoDataNetScraper {
 
         if (bestScore <= -20) {
             log.warn("[AutoDataNet] Nessun motore con requisiti accettabili, uso il fallback di sicurezza");
-            return candidates.get(0).url();
+            return candidates.getFirst().url();
         }
 
-        return bestUrl != null ? bestUrl : candidates.get(0).url();
+        return bestUrl != null ? bestUrl : candidates.getFirst().url();
     }
 
     private List<String> buildFuelTokens(String motoreNorm, String tipoCarburanteUtente) {
@@ -915,7 +903,7 @@ public class AutoDataNetScraper {
         if (tipoCarburanteUtente != null && !tipoCarburanteUtente.isBlank()) {
             String alias = FUEL_ALIAS.get(tipoCarburanteUtente.toLowerCase().trim());
             if (alias != null && !tokens.contains(alias)) {
-                tokens.add(0, alias);
+                tokens.addFirst(alias);
             }
         }
         return tokens;
@@ -925,7 +913,7 @@ public class AutoDataNetScraper {
         List<String> tokens = new ArrayList<>(matchTokens(motoreNorm, GEAR_TOKENS));
         if (tipoCambioUtente != null && !tipoCambioUtente.isBlank()) {
             String t = normalize(tipoCambioUtente);
-            if (!tokens.contains(t)) tokens.add(0, t);
+            if (!tokens.contains(t)) tokens.addFirst(t);
         }
         return tokens;
     }
@@ -941,12 +929,9 @@ public class AutoDataNetScraper {
     }
 
 
-// ══════════════════════════════════════════════
-    //  LIVELLO 5 — SCHEDA TECNICA (CHIRURGICO)
-    // ══════════════════════════════════════════════
 
 // ══════════════════════════════════════════════
-    //  LIVELLO 5 — SCHEDA TECNICA (CHIRURGICO MULTI-TABELLA)
+    //  LIVELLO 5 — SCHEDA TECNICA
     // ══════════════════════════════════════════════
 
     private Optional<String> fetchSchedaTecnica(String url) throws IOException {
@@ -1020,7 +1005,7 @@ public class AutoDataNetScraper {
 
     private String absoluteHref(Element a) {
         String href = a.attr("href");
-        if (href == null || href.isBlank()) return "";
+        if (href.isBlank()) return "";
         if (href.startsWith("http")) return href;
         if (href.startsWith("/")) return BASE + href;
         return "";

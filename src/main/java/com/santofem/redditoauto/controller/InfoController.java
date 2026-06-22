@@ -44,6 +44,10 @@ public class InfoController {
         return ResponseEntity.ok(getInfo.getEnginesByModel(model));
     }
 
+    @GetMapping("/models/years/{year}")
+    public ResponseEntity<List<String>> getModelsByYear(@PathVariable Integer year){
+        return ResponseEntity.ok(getInfo.getModelsByYear(year));
+    }
 
 
 }
