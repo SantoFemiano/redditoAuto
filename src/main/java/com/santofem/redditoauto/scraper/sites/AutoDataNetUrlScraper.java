@@ -53,6 +53,8 @@ public class AutoDataNetUrlScraper implements UrlScraperStrategy {
         return SITE_NAME;
     }
 
+    private static record SchedaInfo(String testo, Integer from, Integer to, java.util.List<String> sampleRows) {}
+
     @Override
     public MultiSiteScraperResult scrape(String url) {
         log.info("[AutoDataNetUrl] Scraping URL diretto: {}", url);
@@ -75,8 +77,9 @@ public class AutoDataNetUrlScraper implements UrlScraperStrategy {
                     .referrer("https://www.auto-data.net/it/")
                     .get();
 
-            // Sostituito con il nuovo metodo chirurgico
-            String testo = estraiTabelleTecniche(doc, url);
+            // Sostituito con il nuovo metodo chirurgico che restituisce also anni
+            SchedaInfo scheda = estraiTabelleTecniche(doc, url);
+            String testo = scheda == null ? "" : scheda.testo();
 
             if (testo.isBlank() || testo.length() < 200) {
                 log.warn("[AutoDataNetUrl] Testo troppo corto o vuoto: {} chars", testo.length());
@@ -91,10 +94,12 @@ public class AutoDataNetUrlScraper implements UrlScraperStrategy {
 
             // Se abbiamo trovato annoFrom/annoTo nella tabella, preferiscili
             int annoHint = 0;
-            if (foundTo != null) annoHint = foundTo;
-            else if (foundFrom != null) annoHint = foundFrom;
+            if (scheda != null) {
+                if (scheda.to() != null) annoHint = scheda.to();
+                else if (scheda.from() != null) annoHint = scheda.from();
+            }
 
-            if (!savedRows.isEmpty()) log.debug("[AutoDataNetUrl] Sample rows: {}", savedRows.subList(0, Math.min(8, savedRows.size())));
+            if (scheda != null && scheda.sampleRows() != null && !scheda.sampleRows().isEmpty()) log.debug("[AutoDataNetUrl] Sample rows: {}", scheda.sampleRows().subList(0, Math.min(8, scheda.sampleRows().size())));
 
             return MultiSiteScraperResult.builder()
                     .testo(truncate(testo, maxTextLength))
@@ -121,7 +126,7 @@ public class AutoDataNetUrlScraper implements UrlScraperStrategy {
         return "UNKNOWN";
     }
 
-    private String estraiTabelleTecniche(Document doc, String url) {
+    private SchedaInfo estraiTabelleTecniche(Document doc, String url) {
         // Pulizia aggressiva del DOM prima di leggere
         doc.select("nav, header, footer, script, style, iframe, .ad970, .ads, .cookie, noscript").remove();
         // Rimuove i link in fondo alla pagina (es. "Altre auto di questa generazione") che confondono Gemini
@@ -139,7 +144,7 @@ public class AutoDataNetUrlScraper implements UrlScraperStrategy {
 
         Integer foundFrom = null;
         Integer foundTo = null;
-        List<String> savedRows = new java.util.ArrayList<>();
+        java.util.List<String> savedRows = new java.util.ArrayList<>();
 
         if (!tabelleTecniche.isEmpty()) {
             // Estrae SOLO dalla tabella principale per evitare contaminazioni
@@ -185,7 +190,7 @@ public class AutoDataNetUrlScraper implements UrlScraperStrategy {
             }
         }
 
-        return sb.toString().trim();
+        return new SchedaInfo(sb.toString().trim(), foundFrom, foundTo, savedRows);
     }
     /**
      * Inferisce [marca, modello, anno] dal titolo della pagina.
