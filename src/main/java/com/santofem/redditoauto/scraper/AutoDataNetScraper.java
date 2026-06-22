@@ -1007,6 +1007,7 @@ public class AutoDataNetScraper {
 
         Integer foundFrom = null;
         Integer foundTo = null;
+        List<String> savedRows = new ArrayList<>();
 
         for (Element table : tabelleTecniche) {
             for (Element row : table.select("tr")) {
@@ -1028,28 +1029,43 @@ public class AutoDataNetScraper {
                     if (labelNorm.contains("inizio") && labelNorm.contains("anno")) {
                         Matcher m = YEAR_PAT.matcher(value);
                         if (m.find()) {
-                            try { foundFrom = Integer.parseInt(m.group()); }
-                            catch (NumberFormatException ignored) {}
+                            try { foundFrom = Integer.parseInt(m.group());
+                                log.debug("[AutoDataNet] Parsed annoInizio from '{}': {}", value, foundFrom);
+                            } catch (NumberFormatException ignored) { log.debug("[AutoDataNet] Failed to parse annoInizio '{}'", m.group()); }
+                        } else {
+                            log.debug("[AutoDataNet] No year match in annoInizio value='{}'", value);
                         }
                     } else if (labelNorm.contains("fine") && labelNorm.contains("anno")) {
                         Matcher m = YEAR_PAT.matcher(value);
                         if (m.find()) {
-                            try { foundTo = Integer.parseInt(m.group()); }
-                            catch (NumberFormatException ignored) {}
+                            try { foundTo = Integer.parseInt(m.group());
+                                log.debug("[AutoDataNet] Parsed annoFine from '{}': {}", value, foundTo);
+                            } catch (NumberFormatException ignored) { log.debug("[AutoDataNet] Failed to parse annoFine '{}'", m.group()); }
+                        } else {
+                            log.debug("[AutoDataNet] No year match in annoFine value='{}'", value);
                         }
                     }
 
                     // Salviamo solo se le righe sono sensate (label corte)
-                    if (!label.isEmpty() && !value.isEmpty() && label.length() < 60) {
-                        sb.append(label).append(": ").append(value).append("\n");
+                    if (!label.isEmpty() && !value.isEmpty() && label.length() < 120) {
+                        String rowLine = label + ": " + value;
+                        sb.append(rowLine).append("\n");
+                        savedRows.add(rowLine);
                     }
                 }
             }
         }
 
         String finalOutput = sb.toString().trim();
-        return finalOutput.length() > 100 ? Optional.of(new SchedaData(finalOutput,
-                foundFrom, foundTo)) : Optional.empty();
+        log.debug("[AutoDataNet] fetchSchedaTecnica: collected {} rows, finalOutput.length={}", savedRows.size(), finalOutput.length());
+        if (!savedRows.isEmpty()) log.debug("[AutoDataNet] Sample rows: {}", savedRows.subList(0, Math.min(8, savedRows.size())));
+
+        // Restituisci SchedaData anche se il testo è corto, ma sono stati trovati annoFrom/annoTo
+        if (foundFrom != null || foundTo != null || finalOutput.length() > 120) {
+            return Optional.of(new SchedaData(finalOutput, foundFrom, foundTo));
+        }
+
+        return Optional.empty();
     }    // ══════════════════════════════════════════════
     //  UTILITY
     // ══════════════════════════════════════════════
