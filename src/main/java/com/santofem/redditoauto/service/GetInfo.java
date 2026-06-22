@@ -10,6 +10,7 @@ import lombok.Data;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.time.LocalDate;
 
 @Data
 @Service
@@ -50,7 +51,16 @@ public class GetInfo {
     //ricerca modello auto per anno
 
     public List<String> getModelsByYear(Integer year){
-    List<String> elencoModelli = modelloRepository.findAllByYear(year).stream().map(Modello::getNome).toList();
+    int currentYear = LocalDate.now().getYear();
+    List<Modello> modelli;
+    if(year > currentYear){
+        // Per anni futuri, escludi record con annoFine = NULL
+        modelli = modelloRepository.findAllByYearExcludeNull(year);
+    } else {
+        // Per anni correnti o passati, includi anche quelli con annoFine NULL (ancora in produzione)
+        modelli = modelloRepository.findAllByYear(year);
+    }
+    List<String> elencoModelli = modelli.stream().map(Modello::getNome).toList();
     if(elencoModelli.isEmpty()){
         throw new RuntimeException("Non sono stati trovati modelli corrispondenti per questo anno");
     }
