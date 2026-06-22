@@ -519,9 +519,9 @@ public class AutoDataNetScraper {
             if (genResult.isFallback()) {
                 log.warn("[AutoDataNet] Anno {} non disponibile: usata generazione {}. Anno salvato: {}",
                         anno, genResult.annoEffettivo(), genResult.annoEffettivo());
-                return ScraperResult.foundWithFallback(testo.get(), anno, genResult.annoEffettivo());
+                return ScraperResult.foundWithFallback(testo.get(), anno, genResult.annoEffettivo(), genResult.from(), genResult.to());
             }
-            return ScraperResult.found(testo.get(), anno);
+            return ScraperResult.found(testo.get(), anno, genResult.from(), genResult.to());
 
         } catch (Exception e) {
             log.warn("[AutoDataNet] Errore: {}", e.getMessage());
@@ -715,6 +715,8 @@ public class AutoDataNetScraper {
         int    fallbackAnno = anno;
         int    minDiff = Integer.MAX_VALUE; // Memorizza la distanza di anni minima
 
+        int bestTo = Integer.MIN_VALUE;
+        int fallbackTo = Integer.MIN_VALUE;
         for (Element a : doc.select("a[href*=-generation-]")) {
             String href = absoluteHref(a);
             if (href.isEmpty()) continue;
@@ -731,6 +733,7 @@ public class AutoDataNetScraper {
             // Match Perfetto: L'anno rientra nella generazione
             if (anno >= from && anno <= to && from > bestFrom) {
                 bestFrom    = from;
+                bestTo      = to;
                 bestUrl     = href;
                 bestAnnoEff = anno;
             }
@@ -747,11 +750,12 @@ public class AutoDataNetScraper {
                 fallbackUrl = href;
                 // Imposta come anno di fallback l'estremo più vicino a quello cercato
                 fallbackAnno = (anno < from) ? from : to;
+                fallbackTo = to;
             }
         }
 
-        if (bestUrl != null) return new GenerazioneResult(bestUrl, bestAnnoEff, false);
-        if (fallbackUrl != null) return new GenerazioneResult(fallbackUrl, fallbackAnno, true);
+        if (bestUrl != null) return new GenerazioneResult(bestUrl, bestAnnoEff, false, bestFrom, bestTo == Integer.MIN_VALUE ? 2099 : bestTo);
+        if (fallbackUrl != null) return new GenerazioneResult(fallbackUrl, fallbackAnno, true, (bestFrom == Integer.MIN_VALUE ? fallbackAnno : bestFrom), fallbackTo == Integer.MIN_VALUE ? fallbackAnno : fallbackTo);
 
         return null;
     }
@@ -1078,5 +1082,5 @@ public class AutoDataNetScraper {
 
     private record LinkEntry(String name, String url, int cv, String cilindrata) {}
 
-    private record GenerazioneResult(String url, int annoEffettivo, boolean isFallback) {}
+    private record GenerazioneResult(String url, int annoEffettivo, boolean isFallback, int from, int to) {}
 }

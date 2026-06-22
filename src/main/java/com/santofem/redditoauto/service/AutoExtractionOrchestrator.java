@@ -117,7 +117,7 @@ public class AutoExtractionOrchestrator {
             fonteDati = "ai-direct:" + marca + ":" + modello + ":" + anno;
         }
 
-        MotorizzazioneResponseDTO response = persistiDto(dto, fonteDati);
+        MotorizzazioneResponseDTO response = persistiDto(dto, fonteDati, scraperResult.annoFrom(), scraperResult.annoTo());
         if (warningAnno != null) {
             response.setWarningAnno(warningAnno);
             log.info("[Orchestratore] Warning anno propagato: {}", warningAnno);
@@ -181,7 +181,10 @@ public class AutoExtractionOrchestrator {
         String fonteDati = "scraping:" + scraped.getSiteNome() + ":" + url;
 
         // 6. Persisti e ottieni il DTO di risposta
-        MotorizzazioneResponseDTO response = persistiDto(dto, fonteDati);
+        // Se lo scraper ha fornito un hint anno, usalo come from/to
+        Integer hintFrom = scraped.getAnnoHint() > 0 ? scraped.getAnnoHint() : null;
+        Integer hintTo = hintFrom;
+        MotorizzazioneResponseDTO response = persistiDto(dto, fonteDati, hintFrom, hintTo);
 
         // 7. Propaga il prezzo trovato dallo scraper (più affidabile dell'AI)
         //    Solo se il prezzo è presente e nel range plausibile per un'auto
@@ -203,7 +206,7 @@ public class AutoExtractionOrchestrator {
     public MotorizzazioneResponseDTO estraiDaTesto(String testoGrezzo, String fonteDati) {
         CarDataDTO dto = callAiSafely(() -> aiExtractor.extractCarData(
             "sconosciuta", "sconosciuto", "sconosciuto", "0", truncaTestoScraping(testoGrezzo)));
-        return persistiDto(dto, fonteDati);
+        return persistiDto(dto, fonteDati, null, null);
     }
 
     // -----------------------------------------------
@@ -286,7 +289,7 @@ public class AutoExtractionOrchestrator {
     // VALIDAZIONE + DEDUP + PERSIST
     // -----------------------------------------------
 
-    private MotorizzazioneResponseDTO persistiDto(CarDataDTO dto, String fonteDati) {
+    private MotorizzazioneResponseDTO persistiDto(CarDataDTO dto, String fonteDati, Integer annoFrom, Integer annoTo) {
         log.info("[AI] Estratto: marca='{}' modello='{}' motore='{}' anno={} carburante='{}' kw={}",
             dto.marca(), dto.modello(), dto.nomeMotore(), dto.annoProduzione(),
             dto.tipoCarburante(), dto.potenzaKw());
@@ -330,12 +333,18 @@ public class AutoExtractionOrchestrator {
             .findByMarcaIdAndNomeIgnoreCase(marca.getId(), dto.modello())
             .orElseGet(() -> {
                 log.info("[DB] Creazione nuovo modello: {} {}", dto.marca(), dto.modello());
-                return modelloRepository.save(
-                    Modello.builder()
+                Modello.ModelloBuilder builder = Modello.builder()
                         .marca(marca)
                         .nome(capitalizza(dto.modello()))
-                        .annoInizio(dto.annoProduzione())
-                        .build());
+                        .annoInizio(dto.annoProduzione());
+
+                if (annoTo != null) {
+                    // 2099 indica intervallo aperto; persistiamo NULL per modello ancora in produzione
+                    if (annoTo >= 2099) builder.annoFine(null);
+                    else builder.annoFine(annoTo);
+                }
+
+                return modelloRepository.save(builder.build());
             });
 
         Motorizzazione motorizzazione = carDataMapper.toEntity(dto, modello);

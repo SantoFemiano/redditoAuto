@@ -13,22 +13,24 @@ public record ScraperResult(
         String testo,
         int annoRichiesto,
         int annoEffettivo,
+        int annoFrom,
+        int annoTo,
         boolean annoFallback
 ) {
 
     /** Factory per risultato con anno corrispondente esatto. */
-    public static ScraperResult found(String testo, int anno) {
-        return new ScraperResult(testo, anno, anno, false);
+    public static ScraperResult found(String testo, int anno, int from, int to) {
+        return new ScraperResult(testo, anno, anno, from, to, false);
     }
 
     /** Factory per risultato con fallback su anno diverso. */
-    public static ScraperResult foundWithFallback(String testo, int annoRichiesto, int annoEffettivo) {
-        return new ScraperResult(testo, annoRichiesto, annoEffettivo, true);
+    public static ScraperResult foundWithFallback(String testo, int annoRichiesto, int annoEffettivo, int from, int to) {
+        return new ScraperResult(testo, annoRichiesto, annoEffettivo, from, to, true);
     }
 
     /** Factory per scraping fallito (nessun testo trovato). */
     public static ScraperResult empty(int annoRichiesto) {
-        return new ScraperResult(null, annoRichiesto, annoRichiesto, false);
+        return new ScraperResult(null, annoRichiesto, annoRichiesto, 0, 0, false);
     }
 
     public boolean hasText() {
