@@ -329,23 +329,46 @@ public class AutoExtractionOrchestrator {
                     Marca.builder().nome(capitalizza(dto.marca())).build());
             });
 
-        Modello modello = modelloRepository
-            .findByMarcaIdAndNomeIgnoreCase(marca.getId(), dto.modello())
-            .orElseGet(() -> {
-                log.info("[DB] Creazione nuovo modello: {} {}", dto.marca(), dto.modello());
-                Modello.ModelloBuilder builder = Modello.builder()
-                        .marca(marca)
-                        .nome(capitalizza(dto.modello()))
-                        .annoInizio(dto.annoProduzione());
-
-                if (annoTo != null) {
-                    // 2099 indica intervallo aperto; persistiamo NULL per modello ancora in produzione
-                    if (annoTo >= 2099) builder.annoFine(null);
-                    else builder.annoFine(annoTo);
+        Modello modello;
+        var modelloOpt = modelloRepository.findByMarcaIdAndNomeIgnoreCase(marca.getId(), dto.modello());
+        if (modelloOpt.isPresent()) {
+            modello = modelloOpt.get();
+            boolean updated = false;
+            // Aggiorna annoInizio se fornito dallo scraper e mancante in DB
+            if (annoFrom != null) {
+                if (modello.getAnnoInizio() == null || !modello.getAnnoInizio().equals(annoFrom)) {
+                    modello.setAnnoInizio(annoFrom);
+                    updated = true;
                 }
+            }
+            // Aggiorna annoFine se fornito dallo scraper
+            if (annoTo != null) {
+                Integer newAnnoFine = (annoTo >= 2099) ? null : annoTo;
+                if (!Objects.equals(modello.getAnnoFine(), newAnnoFine)) {
+                    modello.setAnnoFine(newAnnoFine);
+                    updated = true;
+                }
+            }
+            if (updated) {
+                log.info("[DB] Aggiornamento modello esistente '{}' {} con annoFrom={} annoTo={}",
+                    marca.getNome(), modello.getNome(), annoFrom, annoTo);
+                modello = modelloRepository.save(modello);
+            }
+        } else {
+            log.info("[DB] Creazione nuovo modello: {} {}", dto.marca(), dto.modello());
+            Modello.ModelloBuilder builder = Modello.builder()
+                    .marca(marca)
+                    .nome(capitalizza(dto.modello()))
+                    .annoInizio(dto.annoProduzione());
 
-                return modelloRepository.save(builder.build());
-            });
+            if (annoTo != null) {
+                // 2099 indica intervallo aperto; persistiamo NULL per modello ancora in produzione
+                if (annoTo >= 2099) builder.annoFine(null);
+                else builder.annoFine(annoTo);
+            }
+
+            modello = modelloRepository.save(builder.build());
+        }
 
         Motorizzazione motorizzazione = carDataMapper.toEntity(dto, modello);
         motorizzazione.setFonteDati(fonteDati);
