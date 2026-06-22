@@ -432,6 +432,8 @@ public class AutoDataNetScraper {
     private final Map<String, String> discoveredBrands = new ConcurrentHashMap<>();
 
     private static final Pattern YEAR_PAT  = Pattern.compile("(20|19)\\d{2}");
+    // Pattern per range espliciti come "2015-2018" o "2015–2018" (con eventuale end mancante)
+    private static final Pattern RANGE_PAT = Pattern.compile("(20|19)\\d{2}\\s*[–—-]\\s*((?:20|19)\\d{2})?");
     private static final Pattern POWER_PAT = Pattern.compile("(\\d{2,4})\\s*(?:cv|hp|kw)", Pattern.CASE_INSENSITIVE);
     private static final Pattern POWER_NUM = Pattern.compile("(?<![.\\d])(\\d{2,3})(?![.\\d])");
     private static final Pattern DISP_PAT  = Pattern.compile("(\\d[.,]\\d)");
@@ -720,8 +722,7 @@ public class AutoDataNetScraper {
             // Filtro anti-contaminazione
             if (modelPrefix != null && !href.contains(modelPrefix)) continue;
 
-            Element parent = a.closest("div, li, tr, td");
-            String ctx = (parent != null ? parent.text() : "") + " " + a.text();
+            String ctx = gatherNearbyText(a);
             int[] range = extractYearRange(ctx);
             if (range == null) continue;
 
@@ -755,12 +756,55 @@ public class AutoDataNetScraper {
         return null;
     }
     private int[] extractYearRange(String text) {
+        if (text == null) return null;
+        // 1) Proviamo a matchare esplicitamente range tipo "2015 - 2018" o "2015–2018" (anche con end mancante)
+        Matcher r = RANGE_PAT.matcher(text);
+        if (r.find()) {
+            int from = Integer.parseInt(r.group(0).replaceAll("[^0-9].*", "").replaceAll("[^0-9]", ""));
+            String g2 = r.group(2);
+            int to = (g2 != null && !g2.isEmpty()) ? Integer.parseInt(g2) : 2099;
+            return new int[]{from, to};
+        }
+
+        // 2) Fallback: raccogliamo tutte le occorrenze di anni nel contesto e usiamo min/max
         List<Integer> years = new ArrayList<>();
         Matcher m = YEAR_PAT.matcher(text);
         while (m.find()) years.add(Integer.parseInt(m.group()));
         if (years.isEmpty()) return null;
         Collections.sort(years);
-        return new int[]{ years.getFirst(), years.size() > 1 ? years.getLast() : 2099 };
+        int from = years.get(0);
+        int to = years.size() > 1 ? years.get(years.size() - 1) : from;
+
+        // Se c'è solo un anno e il testo contiene un trattino senza anno dopo (es. "2015–") consideriamo end aperto
+        if (years.size() == 1) {
+            if (text.matches(".*[–—-]\s*$")) {
+                to = 2099;
+            }
+        }
+        return new int[]{from, to};
+    }
+
+    /**
+     * Raccoglie testo utile attorno al link della generazione: testo dell'elemento, parent, siblings, grandparent.
+     */
+    private String gatherNearbyText(Element a) {
+        StringBuilder sb = new StringBuilder();
+        try {
+            sb.append(a.text()).append(" ");
+            Element parent = a.parent();
+            if (parent != null) sb.append(parent.text()).append(" ");
+            Element grand = parent != null ? parent.parent() : null;
+            if (grand != null) sb.append(grand.text()).append(" ");
+            Element closest = a.closest("li, tr, div, td, span, p");
+            if (closest != null) sb.append(closest.text()).append(" ");
+            Element prev = a.previousElementSibling();
+            if (prev != null) sb.append(prev.text()).append(" ");
+            Element next = a.nextElementSibling();
+            if (next != null) sb.append(next.text()).append(" ");
+        } catch (Exception e) {
+            // Non fallire per problemi di parsing del DOM
+        }
+        return sb.toString();
     }
 
 // ══════════════════════════════════════════════
