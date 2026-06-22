@@ -190,6 +190,14 @@ public class AutoDataNetUrlScraper implements UrlScraperStrategy {
             }
         }
 
+        // Se non abbiamo trovato anni nelle celle principali, cerchiamo in tutto il documento
+        if (foundFrom == null || foundTo == null) {
+            if (foundFrom == null) foundFrom = findYearInDocByLabels(doc, new String[]{"inizio anno", "inizio"});
+            if (foundTo == null)   foundTo   = findYearInDocByLabels(doc, new String[]{"fine anno", "fine"});
+            if (foundFrom != null) log.debug("[AutoDataNetUrl] Found annoInizio via full-doc search: {}", foundFrom);
+            if (foundTo != null)   log.debug("[AutoDataNetUrl] Found annoFine via full-doc search: {}", foundTo);
+        }
+
         return new SchedaInfo(sb.toString().trim(), foundFrom, foundTo, savedRows);
     }
     /**
@@ -213,5 +221,39 @@ public class AutoDataNetUrlScraper implements UrlScraperStrategy {
 
     private String truncate(String text, int max) {
         return text.length() <= max ? text : text.substring(0, max) + "...[TRONCATO]";
+    }
+
+    /** Cerca elementi contenenti label indicate e prova ad estrarre anno/anno-month dal loro contesto */
+    private Integer findYearInDocByLabels(Document doc, String[] labels) {
+        for (Element e : doc.getAllElements()) {
+            String txt = e.text();
+            if (txt == null || txt.isBlank()) continue;
+            String lower = txt.toLowerCase();
+            boolean matches = false;
+            for (String lab : labels) if (lower.contains(lab)) { matches = true; break; }
+            if (!matches) continue;
+
+            // Prova month+year prima
+            Matcher mMonth = MONTH_YEAR_PAT.matcher(txt);
+            if (mMonth.find()) {
+                try { return Integer.parseInt(mMonth.group(1)); } catch (NumberFormatException ignored) {}
+            }
+            // Prova year semplice
+            Matcher m = YEAR_PAT.matcher(txt);
+            if (m.find()) {
+                try { return Integer.parseInt(m.group()); } catch (NumberFormatException ignored) {}
+            }
+
+            // Prova testo del vicino (sibling)
+            Element next = e.nextElementSibling();
+            if (next != null) {
+                String ntxt = next.text();
+                Matcher mm = MONTH_YEAR_PAT.matcher(ntxt);
+                if (mm.find()) { try { return Integer.parseInt(mm.group(1)); } catch (NumberFormatException ignored) {} }
+                Matcher m2 = YEAR_PAT.matcher(ntxt);
+                if (m2.find()) { try { return Integer.parseInt(m2.group()); } catch (NumberFormatException ignored) {} }
+            }
+        }
+        return null;
     }
 }
