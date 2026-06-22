@@ -47,6 +47,16 @@ public class GetInfo {
         return motorizzazioneRepository.findAllByModelloId(modelId).stream().map(Motorizzazione::getNomeMotore).toList();
     }
 
+    //ricerca modello auto per anno
+
+    public List<String> getModelsByYear(Integer year){
+    List<String> elencoModelli = modelloRepository.findAllByYear(year).stream().map(Modello::getNome).toList();
+    if(elencoModelli.isEmpty()){
+        throw new RuntimeException("Non sono stati trovati modelli corrispondenti per questo anno");
+    }
+    return elencoModelli;
+    }
+
 
 
 

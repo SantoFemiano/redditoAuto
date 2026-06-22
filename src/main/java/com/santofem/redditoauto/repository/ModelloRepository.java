@@ -17,4 +17,9 @@ public interface ModelloRepository extends JpaRepository<Modello, Long> {
 
     @Query("SELECT m.id FROM Modello m WHERE LOWER(m.nome) = LOWER(:nome)")
     Long findByNome(@Param("nome") String model);
+
+    List<Modello> findAllByAnnoInizio(Integer annoInizio);
+
+    @Query("SELECT m FROM Modello m WHERE m.annoInizio <= :year AND (m.annoFine IS NULL OR m.annoFine >= :year)")
+    List<Modello> findAllByYear(@Param("year") Integer year);
 }
