@@ -32,6 +32,7 @@ public class AutoDataNetUrlScraper implements UrlScraperStrategy {
 
     private static final String SITE_NAME = "auto-data.net";
     private static final Pattern YEAR_PAT = Pattern.compile("(20|19)\\d{2}");
+    private static final Pattern MONTH_YEAR_PAT = Pattern.compile("(?i)(?:gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre)\\s*,?\\s*((?:19|20)\\d{2})");
 
     @Value("${scraper.timeout-ms:10000}")
     private int timeoutMs;
@@ -88,13 +89,20 @@ public class AutoDataNetUrlScraper implements UrlScraperStrategy {
 
             log.info("[AutoDataNetUrl] Estratti {} chars da {}", testo.length(), SITE_NAME);
 
+            // Se abbiamo trovato annoFrom/annoTo nella tabella, preferiscili
+            int annoHint = 0;
+            if (foundTo != null) annoHint = foundTo;
+            else if (foundFrom != null) annoHint = foundFrom;
+
+            if (!savedRows.isEmpty()) log.debug("[AutoDataNetUrl] Sample rows: {}", savedRows.subList(0, Math.min(8, savedRows.size())));
+
             return MultiSiteScraperResult.builder()
                     .testo(truncate(testo, maxTextLength))
                     .siteNome(SITE_NAME)
                     .url(url)
                     .marcaHint(hint[0])
                     .modelloHint(hint[1])
-                    .annoHint(hint[2] != null ? Integer.parseInt(hint[2]) : 0)
+                    .annoHint(annoHint)
                     .build();
 
         } catch (IOException e) {
@@ -129,6 +137,10 @@ public class AutoDataNetUrlScraper implements UrlScraperStrategy {
             tabelleTecniche = doc.select("table"); // Fallback
         }
 
+        Integer foundFrom = null;
+        Integer foundTo = null;
+        List<String> savedRows = new java.util.ArrayList<>();
+
         if (!tabelleTecniche.isEmpty()) {
             // Estrae SOLO dalla tabella principale per evitare contaminazioni
             Element tabellaPrincipale = tabelleTecniche.first();
@@ -138,9 +150,36 @@ public class AutoDataNetUrlScraper implements UrlScraperStrategy {
                     String label = cells.get(0).text().trim();
                     String value = cells.get(1).text().trim();
 
+                    // Proviamo a catturare Inizio/Fine anno di produzione
+                    String labelNorm = label.toLowerCase();
+                    String valNorm = value.replace('\u00A0', ' ').trim();
+                    Matcher mMonth = MONTH_YEAR_PAT.matcher(valNorm);
+                    if (labelNorm.contains("inizio") && labelNorm.contains("anno")) {
+                        if (mMonth.find()) {
+                            try { foundFrom = Integer.parseInt(mMonth.group(1));
+                                log.debug("[AutoDataNetUrl] Parsed annoInizio (month) from '{}': {}", valNorm, foundFrom);
+                            } catch (NumberFormatException ignored) { log.debug("[AutoDataNetUrl] Failed parsing month-year '{}'", valNorm); }
+                        } else {
+                            Matcher m = YEAR_PAT.matcher(valNorm);
+                            if (m.find()) { try { foundFrom = Integer.parseInt(m.group()); log.debug("[AutoDataNetUrl] Parsed annoInizio from '{}': {}", valNorm, foundFrom); } catch (NumberFormatException ignored) {} }
+                        }
+                    }
+                    if (labelNorm.contains("fine") && labelNorm.contains("anno")) {
+                        if (mMonth.find()) {
+                            try { foundTo = Integer.parseInt(mMonth.group(1));
+                                log.debug("[AutoDataNetUrl] Parsed annoFine (month) from '{}': {}", valNorm, foundTo);
+                            } catch (NumberFormatException ignored) { log.debug("[AutoDataNetUrl] Failed parsing month-year '{}'", valNorm); }
+                        } else {
+                            Matcher m = YEAR_PAT.matcher(valNorm);
+                            if (m.find()) { try { foundTo = Integer.parseInt(m.group()); log.debug("[AutoDataNetUrl] Parsed annoFine from '{}': {}", valNorm, foundTo); } catch (NumberFormatException ignored) {} }
+                        }
+                    }
+
                     // Condizione stringente: se la label è lunghissima, è testo spazzatura, lo ignoriamo
-                    if (!label.isEmpty() && !value.isEmpty() && label.length() < 60) {
-                        sb.append(label).append(": ").append(value).append("\n");
+                    if (!label.isEmpty() && !value.isEmpty() && label.length() < 120) {
+                        String rowLine = label + ": " + value;
+                        sb.append(rowLine).append("\n");
+                        savedRows.add(rowLine);
                     }
                 }
             }
