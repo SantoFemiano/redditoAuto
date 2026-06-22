@@ -434,6 +434,7 @@ public class AutoDataNetScraper {
     private static final Pattern YEAR_PAT  = Pattern.compile("(20|19)\\d{2}");
     // Pattern per range espliciti come "2015-2018" o "2015–2018" (con eventuale end mancante)
     private static final Pattern RANGE_PAT = Pattern.compile("(20|19)\\d{2}\\s*[–—-]\\s*((?:20|19)\\d{2})?");
+    private static final Pattern MONTH_YEAR_PAT = Pattern.compile("(?i)(?:gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre)\\s*,?\\s*((?:19|20)\\d{2})");
     private static final Pattern POWER_PAT = Pattern.compile("(\\d{2,4})\\s*(?:cv|hp|kw)", Pattern.CASE_INSENSITIVE);
     private static final Pattern POWER_NUM = Pattern.compile("(?<![.\\d])(\\d{2,3})(?![.\\d])");
     private static final Pattern DISP_PAT  = Pattern.compile("(\\d[.,]\\d)");
@@ -1024,25 +1025,44 @@ public class AutoDataNetScraper {
                     String label = th.text().trim();
                     String value = td.text().trim();
 
-                    // Proviamo a catturare in modo esplicito i campi Inizio/Fine anno di produzione
+                                // Proviamo a catturare in modo esplicito i campi Inizio/Fine anno di produzione
                     String labelNorm = label.toLowerCase();
+                    // Normalizziamo gli spazi e sostituiamo NBSP
+                    String valNorm = value.replace('\u00A0', ' ').trim();
+
                     if (labelNorm.contains("inizio") && labelNorm.contains("anno")) {
-                        Matcher m = YEAR_PAT.matcher(value);
-                        if (m.find()) {
-                            try { foundFrom = Integer.parseInt(m.group());
-                                log.debug("[AutoDataNet] Parsed annoInizio from '{}': {}", value, foundFrom);
-                            } catch (NumberFormatException ignored) { log.debug("[AutoDataNet] Failed to parse annoInizio '{}'", m.group()); }
+                        // Prima proviamo a matchare month+year (es. "Novembre, 2020 anno")
+                        Matcher mMonth = MONTH_YEAR_PAT.matcher(valNorm);
+                        if (mMonth.find()) {
+                            try { foundFrom = Integer.parseInt(mMonth.group(1));
+                                log.debug("[AutoDataNet] Parsed annoInizio (month pattern) from '{}': {}", valNorm, foundFrom);
+                            } catch (NumberFormatException ignored) { log.debug("[AutoDataNet] Failed to parse annoInizio (month) '{}'", mMonth.group(1)); }
                         } else {
-                            log.debug("[AutoDataNet] No year match in annoInizio value='{}'", value);
+                            Matcher m = YEAR_PAT.matcher(valNorm);
+                            if (m.find()) {
+                                try { foundFrom = Integer.parseInt(m.group());
+                                    log.debug("[AutoDataNet] Parsed annoInizio from '{}': {}", valNorm, foundFrom);
+                                } catch (NumberFormatException ignored) { log.debug("[AutoDataNet] Failed to parse annoInizio '{}'", m.group()); }
+                            } else {
+                                log.debug("[AutoDataNet] No year match in annoInizio value='{}'", valNorm);
+                            }
                         }
+
                     } else if (labelNorm.contains("fine") && labelNorm.contains("anno")) {
-                        Matcher m = YEAR_PAT.matcher(value);
-                        if (m.find()) {
-                            try { foundTo = Integer.parseInt(m.group());
-                                log.debug("[AutoDataNet] Parsed annoFine from '{}': {}", value, foundTo);
-                            } catch (NumberFormatException ignored) { log.debug("[AutoDataNet] Failed to parse annoFine '{}'", m.group()); }
+                        Matcher mMonth = MONTH_YEAR_PAT.matcher(valNorm);
+                        if (mMonth.find()) {
+                            try { foundTo = Integer.parseInt(mMonth.group(1));
+                                log.debug("[AutoDataNet] Parsed annoFine (month pattern) from '{}': {}", valNorm, foundTo);
+                            } catch (NumberFormatException ignored) { log.debug("[AutoDataNet] Failed to parse annoFine (month) '{}'", mMonth.group(1)); }
                         } else {
-                            log.debug("[AutoDataNet] No year match in annoFine value='{}'", value);
+                            Matcher m = YEAR_PAT.matcher(valNorm);
+                            if (m.find()) {
+                                try { foundTo = Integer.parseInt(m.group());
+                                    log.debug("[AutoDataNet] Parsed annoFine from '{}': {}", valNorm, foundTo);
+                                } catch (NumberFormatException ignored) { log.debug("[AutoDataNet] Failed to parse annoFine '{}'", m.group()); }
+                            } else {
+                                log.debug("[AutoDataNet] No year match in annoFine value='{}'", valNorm);
+                            }
                         }
                     }
 
