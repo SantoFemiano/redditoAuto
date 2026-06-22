@@ -89,8 +89,8 @@ public class WebScraperService implements WebScraper {
         if (result.hasText()) {
             String sanitized = sanitizeForAi(result.testo());
             log.info("[Scraper] Testo tecnico trovato da 'auto-data.net' ({} chars)", sanitized.length());
-            // Ricostruisce il record conservando tutti i metadati (anno, fallback)
-            return new ScraperResult(sanitized, result.annoRichiesto(), result.annoEffettivo(), result.annoFallback());
+            // Ricostruisce il record conservando tutti i metadati (anno, fallback, range)
+            return new ScraperResult(sanitized, result.annoRichiesto(), result.annoEffettivo(), result.annoFrom(), result.annoTo(), result.annoFallback());
         }
 
         log.warn("[Scraper] auto-data.net non ha trovato dati per: {} {} {}", marca, modello, motore);
