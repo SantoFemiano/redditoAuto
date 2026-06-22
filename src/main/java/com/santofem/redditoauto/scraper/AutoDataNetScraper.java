@@ -511,17 +511,23 @@ public class AutoDataNetScraper {
             }
             log.debug("[AutoDataNet] Livello 4 - Motorizzazione: {}", motorUrl);
 
-            Optional<String> testo = fetchSchedaTecnica(motorUrl);
-            if (testo.isEmpty()) {
+            Optional<SchedaData> scheda = fetchSchedaTecnica(motorUrl);
+            if (scheda.isEmpty()) {
                 return ScraperResult.empty(anno);
             }
+
+            // Se la scheda fornisce from/to più precisi, usali per persistere annoFine
+            Integer schedaFrom = scheda.get().annoFrom();
+            Integer schedaTo   = scheda.get().annoTo();
+            int finalFrom = schedaFrom != null ? schedaFrom : genResult.from();
+            int finalTo   = schedaTo   != null ? schedaTo   : genResult.to();
 
             if (genResult.isFallback()) {
                 log.warn("[AutoDataNet] Anno {} non disponibile: usata generazione {}. Anno salvato: {}",
                         anno, genResult.annoEffettivo(), genResult.annoEffettivo());
-                return ScraperResult.foundWithFallback(testo.get(), anno, genResult.annoEffettivo(), genResult.from(), genResult.to());
+                return ScraperResult.foundWithFallback(scheda.get().testo(), anno, genResult.annoEffettivo(), finalFrom, finalTo);
             }
-            return ScraperResult.found(testo.get(), anno, genResult.from(), genResult.to());
+            return ScraperResult.found(scheda.get().testo(), anno, finalFrom, finalTo);
 
         } catch (Exception e) {
             log.warn("[AutoDataNet] Errore: {}", e.getMessage());
@@ -982,7 +988,9 @@ public class AutoDataNetScraper {
     //  LIVELLO 5 — SCHEDA TECNICA
     // ══════════════════════════════════════════════
 
-    private Optional<String> fetchSchedaTecnica(String url) throws IOException {
+    private static record SchedaData(String testo, Integer annoFrom, Integer annoTo) {}
+
+    private Optional<SchedaData> fetchSchedaTecnica(String url) throws IOException {
         Document doc = fetch(url);
 
         // 1. PULIZIA AGGRESSIVA STRUTTURALE
@@ -996,6 +1004,9 @@ public class AutoDataNetScraper {
 
         // 2. ESTRAZIONE DI TUTTE LE TABELLE RIMASTE NEL DOM PULITO
         Elements tabelleTecniche = doc.select("table");
+
+        Integer foundFrom = null;
+        Integer foundTo = null;
 
         for (Element table : tabelleTecniche) {
             for (Element row : table.select("tr")) {
@@ -1012,6 +1023,22 @@ public class AutoDataNetScraper {
                     String label = th.text().trim();
                     String value = td.text().trim();
 
+                    // Proviamo a catturare in modo esplicito i campi Inizio/Fine anno di produzione
+                    String labelNorm = label.toLowerCase();
+                    if (labelNorm.contains("inizio") && labelNorm.contains("anno")) {
+                        Matcher m = YEAR_PAT.matcher(value);
+                        if (m.find()) {
+                            try { foundFrom = Integer.parseInt(m.group()); }
+                            catch (NumberFormatException ignored) {}
+                        }
+                    } else if (labelNorm.contains("fine") && labelNorm.contains("anno")) {
+                        Matcher m = YEAR_PAT.matcher(value);
+                        if (m.find()) {
+                            try { foundTo = Integer.parseInt(m.group()); }
+                            catch (NumberFormatException ignored) {}
+                        }
+                    }
+
                     // Salviamo solo se le righe sono sensate (label corte)
                     if (!label.isEmpty() && !value.isEmpty() && label.length() < 60) {
                         sb.append(label).append(": ").append(value).append("\n");
@@ -1021,7 +1048,8 @@ public class AutoDataNetScraper {
         }
 
         String finalOutput = sb.toString().trim();
-        return finalOutput.length() > 100 ? Optional.of(finalOutput) : Optional.empty();
+        return finalOutput.length() > 100 ? Optional.of(new SchedaData(finalOutput,
+                foundFrom, foundTo)) : Optional.empty();
     }    // ══════════════════════════════════════════════
     //  UTILITY
     // ══════════════════════════════════════════════
