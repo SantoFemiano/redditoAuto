@@ -3,7 +3,6 @@ package com.santofem.redditoauto.ai.dto;
 import com.fasterxml.jackson.annotation.JsonPropertyDescription;
 import dev.langchain4j.model.output.structured.Description;
 
-import java.time.LocalDateTime;
 
 /**
  * DTO fortemente tipizzato restituito da Gemini tramite LangChain4j structured output.
@@ -33,6 +32,9 @@ public record CarDataDTO(
 
     @JsonPropertyDescription("Anno di produzione o immatricolazione come intero, es. 2022")
     Integer annoProduzione,
+
+    @JsonPropertyDescription("Anno di fine produzione come intero, es. 2025. null se il modello è ancora in produzione.")
+    Integer annoFineProduzione,
 
     @JsonPropertyDescription(
         "Tipo carburante. Usa ESATTAMENTE uno di questi valori: " +

@@ -25,9 +25,10 @@ public interface AiCarDataExtractor {
         6. Per marca e modello: copia sempre esattamente i valori dal CONTESTO VEICOLO.
         7. Per il nomeMotore: se nel CONTESTO VEICOLO e' "sconosciuto", deduci il nome del motore dal TITOLO o dal TESTO GREZZO. Altrimenti usa il CONTESTO.
         8. Per l'annoProduzione: se nel CONTESTO VEICOLO e' 0, estrai l'anno di inizio produzione dal TESTO GREZZO. Altrimenti usa il CONTESTO.
+        9. Per l'annoFineProduzione: estrai l'anno di fine produzione dal TESTO GREZZO. Se l'auto è ancora in produzione o il dato non è presente, imposta null.
         
         REGOLE PER I DATI COMMERCIALI E MANUTENZIONE (STIME DELL'AI):
-        9. Poiche' il testo grezzo non contiene mai i prezzi e i costi di manutenzione, devi OBBLIGATORIAMENTE usare la tua conoscenza interna per stimare in modo realistico i seguenti campi per il mercato italiano:
+        10. Poiche' il testo grezzo non contiene mai i prezzi e i costi di manutenzione, devi OBBLIGATORIAMENTE usare la tua conoscenza interna per stimare in modo realistico i seguenti campi per il mercato italiano:
            - prezzoListinoEur: il prezzo in euro dell'auto da NUOVA in quell'anno (senza simboli, es. 15500.0).
            - costoTagliandoBaseEur: stima del costo di un tagliando ordinario (olio/filtri).
            - costoTagliandoMaiorEur: stima di un tagliando maggiore (cinghia, freni, ecc.).
@@ -38,8 +39,8 @@ public interface AiCarDataExtractor {
            NON restituire MAI 0 o null per questi campi, fai la tua migliore stima di mercato!
         
         REGOLE ANTI-ALLUCINAZIONE:
-        10. Restituisci SOLO il JSON.
-        11. Se nel testo ci sono varianti multiple, estrai solo la prima e ignora il resto.
+        11. Restituisci SOLO il JSON.
+        12. Se nel testo ci sono varianti multiple, estrai solo la prima e ignora il resto.
         """)
     @UserMessage("""
         CONTESTO VEICOLO (copia questi valori esatti nei campi corrispondenti del JSON):

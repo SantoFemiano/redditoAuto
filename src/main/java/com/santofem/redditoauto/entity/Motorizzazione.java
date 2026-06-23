@@ -44,6 +44,9 @@ public class Motorizzazione {
     @Column(name = "anno_produzione", nullable = false)
     private Integer annoProduzione;
 
+    @Column(name="anno_fine_produzione",nullable = true)
+    private Integer annoFineProduzione;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "tipo_carburante", nullable = false, length = 30)
     private TipoCarburante tipoCarburante;

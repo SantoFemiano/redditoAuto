@@ -22,6 +22,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Supplier;
 
@@ -228,7 +229,7 @@ public class AutoExtractionOrchestrator {
         }
 
         return new CarDataDTO(
-            marca, modello, motore, anno,
+            marca, modello, motore, anno, raw.annoFineProduzione(),
             raw.tipoCarburante(), raw.tipoCambio(),
             raw.potenzaKw(), raw.potenzaCv(), raw.cilindrataCC(),
             raw.consumoMedioLitri100km(), raw.consumoUrbanoLitri100km(), raw.consumoExtraurbanoLitri100km(),

@@ -30,6 +30,7 @@ public class MotorizzazioneResponseDTO {
     private String modello;
     private String nomeMotore;
     private int    annoProduzione;
+    private int    annoFineProduzione;
 
     // ── Motorizzazione ────────────────────────────────────────────────────────
     private String  tipoCarburante;
