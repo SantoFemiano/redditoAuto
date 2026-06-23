@@ -994,6 +994,29 @@ public class AutoDataNetScraper {
     private Optional<SchedaData> fetchSchedaTecnica(String url) throws IOException {
         Document doc = fetch(url);
 
+        // --- NOVITÀ: Estrazione Dati Modello/Generazione dal Breadcrumb ---
+        // Avviene PRIMA di rimuovere .breadcrumb dal DOM!
+        String infoGenerazione = "";
+        Integer annoInizioModello = null;
+        Integer annoFineModello = null;
+
+        Elements breadcrumbItems = doc.select(".breadcrumb li, .breadcrumb a, .position a");
+        for (Element item : breadcrumbItems) {
+            String text = item.text().trim();
+            // Cattura pattern complessi come "Audi TT (8J) (2006 - 2014)" o "Nissan Micra K14 (2017 - present)"
+            Matcher m = Pattern.compile(".*\\(\\s*((?:19|20)\\d{2})\\s*[-–—]\\s*((?:19|20)\\d{2}|present|oggi|in produzione)?.*\\).*").matcher(text);
+            if (m.find()) {
+                infoGenerazione = text;
+                annoInizioModello = Integer.parseInt(m.group(1));
+                String fineStr = m.group(2);
+                if (fineStr != null && !fineStr.isEmpty() && fineStr.matches("\\d{4}")) {
+                    annoFineModello = Integer.parseInt(fineStr);
+                } else {
+                    annoFineModello = 2099; // Convenzione per "ancora in produzione"
+                }
+            }
+        }
+
         // 1. PULIZIA AGGRESSIVA STRUTTURALE
         doc.select("nav, header, footer, script, style, iframe, .ad970, .ads, .cookie, noscript").remove();
         doc.select(".breadcrumb, .similar-cars, a[href*=-model-], a[href*=-generation-]").remove();
@@ -1002,6 +1025,19 @@ public class AutoDataNetScraper {
         StringBuilder sb = new StringBuilder();
         sb.append("[FONTE: ").append(url).append("]\n");
         sb.append("TITOLO: ").append(doc.title()).append("\n\n");
+
+        // 1.5 INIEZIONE ESPLICITA DEI DATI MODELLO PER L'LLM
+        if (annoInizioModello != null) {
+            sb.append("--- INFO MODELLO / GENERAZIONE ---\n");
+            sb.append("Nome Generazione: ").append(infoGenerazione).append("\n");
+            sb.append("Inizio anno di produzione Modello: ").append(annoInizioModello).append("\n");
+            if (annoFineModello != null && annoFineModello != 2099) {
+                sb.append("Fine anno di produzione Modello: ").append(annoFineModello).append("\n");
+            } else {
+                sb.append("Fine anno di produzione Modello: in produzione\n");
+            }
+            sb.append("----------------------------------\n\n");
+        }
 
         // 2. ESTRAZIONE DI TUTTE LE TABELLE RIMASTE NEL DOM PULITO
         Elements tabelleTecniche = doc.select("table");
@@ -1012,10 +1048,9 @@ public class AutoDataNetScraper {
 
         for (Element table : tabelleTecniche) {
             for (Element row : table.select("tr")) {
-                Elements th = row.select("th"); // Es. "Consumo di carburante"
-                Elements td = row.select("td"); // Es. "5.5 l/100km"
+                Elements th = row.select("th");
+                Elements td = row.select("td");
 
-                // A volte le tabelle auto-data usano due <td> invece di th/td
                 if (th.isEmpty() && td.size() >= 2) {
                     th = new Elements(td.get(0));
                     td = new Elements(td.get(1));
@@ -1025,48 +1060,36 @@ public class AutoDataNetScraper {
                     String label = th.text().trim();
                     String value = td.text().trim();
 
-                                // Proviamo a catturare in modo esplicito i campi Inizio/Fine anno di produzione
                     String labelNorm = label.toLowerCase();
-                    // Normalizziamo gli spazi e sostituiamo NBSP
                     String valNorm = value.replace('\u00A0', ' ').trim();
 
+                    // Manteniamo la cattura per la MOTORIZZAZIONE
                     if (labelNorm.contains("inizio") && labelNorm.contains("anno")) {
-                        // Prima proviamo a matchare month+year (es. "Novembre, 2020 anno")
                         Matcher mMonth = MONTH_YEAR_PAT.matcher(valNorm);
                         if (mMonth.find()) {
-                            try { foundFrom = Integer.parseInt(mMonth.group(1));
-                                log.debug("[AutoDataNet] Parsed annoInizio (month pattern) from '{}': {}", valNorm, foundFrom);
-                            } catch (NumberFormatException ignored) { log.debug("[AutoDataNet] Failed to parse annoInizio (month) '{}'", mMonth.group(1)); }
+                            try { foundFrom = Integer.parseInt(mMonth.group(1)); }
+                            catch (NumberFormatException ignored) {}
                         } else {
                             Matcher m = YEAR_PAT.matcher(valNorm);
                             if (m.find()) {
-                                try { foundFrom = Integer.parseInt(m.group());
-                                    log.debug("[AutoDataNet] Parsed annoInizio from '{}': {}", valNorm, foundFrom);
-                                } catch (NumberFormatException ignored) { log.debug("[AutoDataNet] Failed to parse annoInizio '{}'", m.group()); }
-                            } else {
-                                log.debug("[AutoDataNet] No year match in annoInizio value='{}'", valNorm);
+                                try { foundFrom = Integer.parseInt(m.group()); }
+                                catch (NumberFormatException ignored) {}
                             }
                         }
-
                     } else if (labelNorm.contains("fine") && labelNorm.contains("anno")) {
                         Matcher mMonth = MONTH_YEAR_PAT.matcher(valNorm);
                         if (mMonth.find()) {
-                            try { foundTo = Integer.parseInt(mMonth.group(1));
-                                log.debug("[AutoDataNet] Parsed annoFine (month pattern) from '{}': {}", valNorm, foundTo);
-                            } catch (NumberFormatException ignored) { log.debug("[AutoDataNet] Failed to parse annoFine (month) '{}'", mMonth.group(1)); }
+                            try { foundTo = Integer.parseInt(mMonth.group(1)); }
+                            catch (NumberFormatException ignored) {}
                         } else {
                             Matcher m = YEAR_PAT.matcher(valNorm);
                             if (m.find()) {
-                                try { foundTo = Integer.parseInt(m.group());
-                                    log.debug("[AutoDataNet] Parsed annoFine from '{}': {}", valNorm, foundTo);
-                                } catch (NumberFormatException ignored) { log.debug("[AutoDataNet] Failed to parse annoFine '{}'", m.group()); }
-                            } else {
-                                log.debug("[AutoDataNet] No year match in annoFine value='{}'", valNorm);
+                                try { foundTo = Integer.parseInt(m.group()); }
+                                catch (NumberFormatException ignored) {}
                             }
                         }
                     }
 
-                    // Salviamo solo se le righe sono sensate (label corte)
                     if (!label.isEmpty() && !value.isEmpty() && label.length() < 120) {
                         String rowLine = label + ": " + value;
                         sb.append(rowLine).append("\n");
@@ -1077,18 +1100,12 @@ public class AutoDataNetScraper {
         }
 
         String finalOutput = sb.toString().trim();
-        log.debug("[AutoDataNet] fetchSchedaTecnica: collected {} rows, finalOutput.length={}", savedRows.size(), finalOutput.length());
-        if (!savedRows.isEmpty()) log.debug("[AutoDataNet] Sample rows: {}", savedRows.subList(0, Math.min(8, savedRows.size())));
 
-        // Se non trovati nella tabella, cerchiamo full-doc per label 'inizio'/'fine'
         if (foundFrom == null || foundTo == null) {
             if (foundFrom == null) foundFrom = findYearInDocByLabels(doc, new String[]{"inizio anno", "inizio"});
             if (foundTo == null)   foundTo   = findYearInDocByLabels(doc, new String[]{"fine anno", "fine"});
-            if (foundFrom != null) log.debug("[AutoDataNet] Found annoInizio via full-doc search: {}", foundFrom);
-            if (foundTo != null)   log.debug("[AutoDataNet] Found annoFine via full-doc search: {}", foundTo);
         }
 
-        // Restituisci SchedaData anche se il testo è corto, ma sono stati trovati annoFrom/annoTo
         if (foundFrom != null || foundTo != null || finalOutput.length() > 120) {
             return Optional.of(new SchedaData(finalOutput, foundFrom, foundTo));
         }
