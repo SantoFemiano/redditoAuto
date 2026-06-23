@@ -25,6 +25,12 @@ import java.util.regex.Pattern;
  *
  * NOTA: non usa la navigazione a 5 livelli di AutoDataNetScraper;
  * riceve direttamente l'URL della motorizzazione.
+ *
+ * Propaga nel MultiSiteScraperResult due set distinti di anni:
+ * - annoInizioModello / annoFineModello → dal breadcrumb (anni del MODELLO/generazione)
+ * - annoHint                            → anno inizio motorizzazione (retrocompatibilità)
+ * Gli anni della motorizzazione (from/to dalla tabella) sono usati internamente
+ * per annoHint ma non propagati separatamente (vengono estratti dall'AI via testo).
  */
 @Component
 @Slf4j
@@ -32,7 +38,12 @@ public class AutoDataNetUrlScraper implements UrlScraperStrategy {
 
     private static final String SITE_NAME = "auto-data.net";
     private static final Pattern YEAR_PAT = Pattern.compile("(20|19)\\d{2}");
-    private static final Pattern MONTH_YEAR_PAT = Pattern.compile("(?i)(?:gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre)\\s*,?\\s*((?:19|20)\\d{2})");
+    private static final Pattern MONTH_YEAR_PAT = Pattern.compile(
+            "(?i)(?:gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre)\\s*,?\\s*((?:19|20)\\d{2})");
+    // Breadcrumb: "Juke II (2019 - 2023)" oppure "Juke II (2019 - present/oggi)"
+    private static final Pattern MODELLO_RANGE_PAT = Pattern.compile(
+            "\\(((?:19|20)\\d{2})\\s*[-\u2013]\\s*((?:19|20)\\d{2}|present|oggi|\\?)\\)");
+    private static final Pattern MODELLO_SOLO_PAT = Pattern.compile("\\(((?:19|20)\\d{2})\\)");
 
     @Value("${scraper.timeout-ms:10000}")
     private int timeoutMs;
@@ -53,13 +64,17 @@ public class AutoDataNetUrlScraper implements UrlScraperStrategy {
         return SITE_NAME;
     }
 
-    private static record SchedaInfo(String testo, Integer from, Integer to, java.util.List<String> sampleRows) {}
+    private static record SchedaInfo(
+            String testo,
+            Integer from,         // anno inizio MOTORIZZAZIONE (dalla tabella)
+            Integer to,           // anno fine MOTORIZZAZIONE (dalla tabella)
+            java.util.List<String> sampleRows
+    ) {}
 
     @Override
     public MultiSiteScraperResult scrape(String url) {
         log.info("[AutoDataNetUrl] Scraping URL diretto: {}", url);
 
-        // 1. SCUDO DI PROTEZIONE: Verifichiamo che sia la scheda di una macchina
         String tipoUrl = identificaTipoUrl(url);
         if (!"VEHICLE".equals(tipoUrl)) {
             log.warn("[AutoDataNetUrl] URL scartato perché non punta a un veicolo finale. Rilevato: {}", tipoUrl);
@@ -77,7 +92,13 @@ public class AutoDataNetUrlScraper implements UrlScraperStrategy {
                     .referrer("https://www.auto-data.net/it/")
                     .get();
 
-            // Sostituito con il nuovo metodo chirurgico che restituisce also anni
+            // IMPORTANTE: parseAnniModelloDaBreadcrumb va chiamato PRIMA di estraiTabelleTecniche
+            // perché quest'ultimo rimuove il breadcrumb dal DOM con doc.select(".breadcrumb,...").remove()
+            int[] anniModello = parseAnniModelloDaBreadcrumb(doc);
+            int modelloFrom = anniModello[0];
+            int modelloTo   = anniModello[1];
+            log.info("[AutoDataNetUrl] Anni modello da breadcrumb: inizio={} fine={}", modelloFrom, modelloTo);
+
             SchedaInfo scheda = estraiTabelleTecniche(doc, url);
             String testo = scheda == null ? "" : scheda.testo();
 
@@ -86,20 +107,23 @@ public class AutoDataNetUrlScraper implements UrlScraperStrategy {
                 return MultiSiteScraperResult.empty(SITE_NAME, url);
             }
 
-            // Inferisce identità dal titolo pagina (es. "Audi A1 Sportback 2020 1.4 TFSI")
             String titolo = doc.title();
             String[] hint = parseIdentitaDaTitolo(titolo);
 
-            log.info("[AutoDataNetUrl] Estratti {} chars da {}", testo.length(), SITE_NAME);
+            // Anni MOTORIZZAZIONE (dalla tabella scheda tecnica)
+            int motorFrom = scheda != null && scheda.from() != null ? scheda.from() : 0;
+            int motorTo   = scheda != null && scheda.to()   != null ? scheda.to()   : 0;
 
-            // Se abbiamo trovato annoFrom/annoTo nella tabella, preferiscili
-            int annoHint = 0;
-            if (scheda != null) {
-                if (scheda.to() != null) annoHint = scheda.to();
-                else if (scheda.from() != null) annoHint = scheda.from();
+            // annoHint retrocompatibilità: preferisce inizio motorizzazione, fallback inizio modello
+            int annoHint = motorFrom > 0 ? motorFrom : modelloFrom;
+
+            log.info("[AutoDataNetUrl] Anni motorizzazione: inizio={} fine={} | Anni modello: inizio={} fine={}",
+                    motorFrom, motorTo, modelloFrom, modelloTo);
+
+            if (scheda != null && scheda.sampleRows() != null && !scheda.sampleRows().isEmpty()) {
+                log.debug("[AutoDataNetUrl] Sample rows: {}",
+                        scheda.sampleRows().subList(0, Math.min(8, scheda.sampleRows().size())));
             }
-
-            if (scheda != null && scheda.sampleRows() != null && !scheda.sampleRows().isEmpty()) log.debug("[AutoDataNetUrl] Sample rows: {}", scheda.sampleRows().subList(0, Math.min(8, scheda.sampleRows().size())));
 
             return MultiSiteScraperResult.builder()
                     .testo(truncate(testo, maxTextLength))
@@ -108,6 +132,8 @@ public class AutoDataNetUrlScraper implements UrlScraperStrategy {
                     .marcaHint(hint[0])
                     .modelloHint(hint[1])
                     .annoHint(annoHint)
+                    .annoInizioModello(modelloFrom)
+                    .annoFineModello(modelloTo)
                     .build();
 
         } catch (IOException e) {
@@ -116,30 +142,75 @@ public class AutoDataNetUrlScraper implements UrlScraperStrategy {
         }
     }
 
+    /**
+     * Estrae anni inizio/fine del MODELLO dal breadcrumb della pagina.
+     * Deve essere chiamato PRIMA di estraiTabelleTecniche che pulisce il DOM.
+     *
+     * auto-data.net ha struttura breadcrumb tipo:
+     *   Nissan > Juke > Juke II (2019 - 2023)
+     *   oppure: Juke II (2019 - present)
+     *
+     * @return int[2]: [annoInizio, annoFine] — 0 se non trovato
+     */
+    private int[] parseAnniModelloDaBreadcrumb(Document doc) {
+        Elements candidati = doc.select(
+                "#breadcrumb a, #breadcrumb span, .breadcrumb a, .breadcrumb span, nav a, nav span");
+
+        for (Element el : candidati) {
+            String txt = el.text();
+            Matcher m = MODELLO_RANGE_PAT.matcher(txt);
+            if (m.find()) {
+                int from = Integer.parseInt(m.group(1));
+                String toStr = m.group(2);
+                int to = toStr.matches("\\d+") ? Integer.parseInt(toStr) : 0;
+                log.debug("[AutoDataNetUrl] Breadcrumb modello range in '{}': {}-{}", txt, from, to);
+                return new int[]{from, to};
+            }
+            Matcher m2 = MODELLO_SOLO_PAT.matcher(txt);
+            if (m2.find()) {
+                int from = Integer.parseInt(m2.group(1));
+                log.debug("[AutoDataNetUrl] Breadcrumb modello solo anno in '{}': {}", txt, from);
+                return new int[]{from, 0};
+            }
+        }
+
+        // Fallback: h1/h2 che spesso contengono il nome generazione con anni
+        for (Element heading : doc.select("h1, h2, .car-title, .model-name, .generation-name")) {
+            String txt = heading.text();
+            Matcher m = MODELLO_RANGE_PAT.matcher(txt);
+            if (m.find()) {
+                int from = Integer.parseInt(m.group(1));
+                String toStr = m.group(2);
+                int to = toStr.matches("\\d+") ? Integer.parseInt(toStr) : 0;
+                log.debug("[AutoDataNetUrl] H1/H2 modello range in '{}': {}-{}", txt, from, to);
+                return new int[]{from, to};
+            }
+        }
+
+        log.debug("[AutoDataNetUrl] Nessun anno modello trovato nel breadcrumb");
+        return new int[]{0, 0};
+    }
+
     private String identificaTipoUrl(String url) {
         if (url == null) return "UNKNOWN";
         if (url.contains("-brand-")) return "BRAND";
         if (url.contains("-model-")) return "MODEL";
         if (url.contains("-generation-")) return "GENERATION";
-        // Se non ha i suffissi di navigazione ma termina con un numero, è un veicolo
         if (url.matches(".*-\\d+/?$")) return "VEHICLE";
         return "UNKNOWN";
     }
 
     private SchedaInfo estraiTabelleTecniche(Document doc, String url) {
-        // Pulizia aggressiva del DOM prima di leggere
         doc.select("nav, header, footer, script, style, iframe, .ad970, .ads, .cookie, noscript").remove();
-        // Rimuove i link in fondo alla pagina (es. "Altre auto di questa generazione") che confondono Gemini
         doc.select(".breadcrumb, .similar-cars, a[href*=-model-], a[href*=-generation-]").remove();
 
         StringBuilder sb = new StringBuilder();
         sb.append("[FONTE: ").append(url).append("]\n");
         sb.append("TITOLO: ").append(doc.title()).append("\n\n");
 
-        // Cerca la tabella specifica delle specifiche tecniche
         Elements tabelleTecniche = doc.select("table.cardetails, table.car-specs");
         if (tabelleTecniche.isEmpty()) {
-            tabelleTecniche = doc.select("table"); // Fallback
+            tabelleTecniche = doc.select("table");
         }
 
         Integer foundFrom = null;
@@ -147,40 +218,35 @@ public class AutoDataNetUrlScraper implements UrlScraperStrategy {
         java.util.List<String> savedRows = new java.util.ArrayList<>();
 
         if (!tabelleTecniche.isEmpty()) {
-            // Estrae SOLO dalla tabella principale per evitare contaminazioni
             Element tabellaPrincipale = tabelleTecniche.first();
             for (Element row : tabellaPrincipale.select("tr")) {
                 Elements cells = row.select("td, th");
                 if (cells.size() >= 2) {
                     String label = cells.get(0).text().trim();
                     String value = cells.get(1).text().trim();
-
-                    // Proviamo a catturare Inizio/Fine anno di produzione
                     String labelNorm = label.toLowerCase();
                     String valNorm = value.replace('\u00A0', ' ').trim();
                     Matcher mMonth = MONTH_YEAR_PAT.matcher(valNorm);
                     if (labelNorm.contains("inizio") && labelNorm.contains("anno")) {
                         if (mMonth.find()) {
                             try { foundFrom = Integer.parseInt(mMonth.group(1));
-                                log.debug("[AutoDataNetUrl] Parsed annoInizio (month) from '{}': {}", valNorm, foundFrom);
-                            } catch (NumberFormatException ignored) { log.debug("[AutoDataNetUrl] Failed parsing month-year '{}'", valNorm); }
+                                log.debug("[AutoDataNetUrl] annoInizio motorizzazione (month): {}", foundFrom);
+                            } catch (NumberFormatException ignored) {}
                         } else {
                             Matcher m = YEAR_PAT.matcher(valNorm);
-                            if (m.find()) { try { foundFrom = Integer.parseInt(m.group()); log.debug("[AutoDataNetUrl] Parsed annoInizio from '{}': {}", valNorm, foundFrom); } catch (NumberFormatException ignored) {} }
+                            if (m.find()) { try { foundFrom = Integer.parseInt(m.group()); } catch (NumberFormatException ignored) {} }
                         }
                     }
                     if (labelNorm.contains("fine") && labelNorm.contains("anno")) {
                         if (mMonth.find()) {
                             try { foundTo = Integer.parseInt(mMonth.group(1));
-                                log.debug("[AutoDataNetUrl] Parsed annoFine (month) from '{}': {}", valNorm, foundTo);
-                            } catch (NumberFormatException ignored) { log.debug("[AutoDataNetUrl] Failed parsing month-year '{}'", valNorm); }
+                                log.debug("[AutoDataNetUrl] annoFine motorizzazione (month): {}", foundTo);
+                            } catch (NumberFormatException ignored) {}
                         } else {
                             Matcher m = YEAR_PAT.matcher(valNorm);
-                            if (m.find()) { try { foundTo = Integer.parseInt(m.group()); log.debug("[AutoDataNetUrl] Parsed annoFine from '{}': {}", valNorm, foundTo); } catch (NumberFormatException ignored) {} }
+                            if (m.find()) { try { foundTo = Integer.parseInt(m.group()); } catch (NumberFormatException ignored) {} }
                         }
                     }
-
-                    // Condizione stringente: se la label è lunghissima, è testo spazzatura, lo ignoriamo
                     if (!label.isEmpty() && !value.isEmpty() && label.length() < 120) {
                         String rowLine = label + ": " + value;
                         sb.append(rowLine).append("\n");
@@ -190,32 +256,23 @@ public class AutoDataNetUrlScraper implements UrlScraperStrategy {
             }
         }
 
-        // Se non abbiamo trovato anni nelle celle principali, cerchiamo in tutto il documento
         if (foundFrom == null || foundTo == null) {
             if (foundFrom == null) foundFrom = findYearInDocByLabels(doc, new String[]{"inizio anno", "inizio"});
             if (foundTo == null)   foundTo   = findYearInDocByLabels(doc, new String[]{"fine anno", "fine"});
-            if (foundFrom != null) log.debug("[AutoDataNetUrl] Found annoInizio via full-doc search: {}", foundFrom);
-            if (foundTo != null)   log.debug("[AutoDataNetUrl] Found annoFine via full-doc search: {}", foundTo);
         }
 
         return new SchedaInfo(sb.toString().trim(), foundFrom, foundTo, savedRows);
     }
-    /**
-     * Inferisce [marca, modello, anno] dal titolo della pagina.
-     * Es. "Audi A3 Sportback 2020 1.4 TFSI 150hp | auto-data.net" → ["Audi", "A3 Sportback", "2020"]
-     */
+
     private String[] parseIdentitaDaTitolo(String titolo) {
         if (titolo == null || titolo.isBlank()) return new String[3];
         String pulito = titolo.replaceAll("\\|.*", "").trim();
-
         String anno = null;
         Matcher m = YEAR_PAT.matcher(pulito);
         if (m.find()) anno = m.group();
-
         String[] parole = pulito.split("\\s+");
         String marca   = parole.length > 0 ? parole[0] : null;
         String modello = parole.length > 1 ? parole[1] : null;
-
         return new String[]{ marca, modello, anno };
     }
 
@@ -223,7 +280,6 @@ public class AutoDataNetUrlScraper implements UrlScraperStrategy {
         return text.length() <= max ? text : text.substring(0, max) + "...[TRONCATO]";
     }
 
-    /** Cerca elementi contenenti label indicate e prova ad estrarre anno/anno-month dal loro contesto */
     private Integer findYearInDocByLabels(Document doc, String[] labels) {
         for (Element e : doc.getAllElements()) {
             String txt = e.text();
@@ -232,19 +288,10 @@ public class AutoDataNetUrlScraper implements UrlScraperStrategy {
             boolean matches = false;
             for (String lab : labels) if (lower.contains(lab)) { matches = true; break; }
             if (!matches) continue;
-
-            // Prova month+year prima
             Matcher mMonth = MONTH_YEAR_PAT.matcher(txt);
-            if (mMonth.find()) {
-                try { return Integer.parseInt(mMonth.group(1)); } catch (NumberFormatException ignored) {}
-            }
-            // Prova year semplice
+            if (mMonth.find()) { try { return Integer.parseInt(mMonth.group(1)); } catch (NumberFormatException ignored) {} }
             Matcher m = YEAR_PAT.matcher(txt);
-            if (m.find()) {
-                try { return Integer.parseInt(m.group()); } catch (NumberFormatException ignored) {}
-            }
-
-            // Prova testo del vicino (sibling)
+            if (m.find()) { try { return Integer.parseInt(m.group()); } catch (NumberFormatException ignored) {} }
             Element next = e.nextElementSibling();
             if (next != null) {
                 String ntxt = next.text();
