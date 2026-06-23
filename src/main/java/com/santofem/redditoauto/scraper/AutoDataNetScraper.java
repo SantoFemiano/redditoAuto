@@ -1067,25 +1067,33 @@ public class AutoDataNetScraper {
                     if (labelNorm.contains("inizio") && labelNorm.contains("anno")) {
                         Matcher mMonth = MONTH_YEAR_PAT.matcher(valNorm);
                         if (mMonth.find()) {
-                            try { foundFrom = Integer.parseInt(mMonth.group(1)); }
-                            catch (NumberFormatException ignored) {}
+                            try {
+                                foundFrom = Integer.parseInt(mMonth.group(1));
+                            } catch (NumberFormatException ignored) {
+                            }
                         } else {
                             Matcher m = YEAR_PAT.matcher(valNorm);
                             if (m.find()) {
-                                try { foundFrom = Integer.parseInt(m.group()); }
-                                catch (NumberFormatException ignored) {}
+                                try {
+                                    foundFrom = Integer.parseInt(m.group());
+                                } catch (NumberFormatException ignored) {
+                                }
                             }
                         }
                     } else if (labelNorm.contains("fine") && labelNorm.contains("anno")) {
                         Matcher mMonth = MONTH_YEAR_PAT.matcher(valNorm);
                         if (mMonth.find()) {
-                            try { foundTo = Integer.parseInt(mMonth.group(1)); }
-                            catch (NumberFormatException ignored) {}
+                            try {
+                                foundTo = Integer.parseInt(mMonth.group(1));
+                            } catch (NumberFormatException ignored) {
+                            }
                         } else {
                             Matcher m = YEAR_PAT.matcher(valNorm);
                             if (m.find()) {
-                                try { foundTo = Integer.parseInt(m.group()); }
-                                catch (NumberFormatException ignored) {}
+                                try {
+                                    foundTo = Integer.parseInt(m.group());
+                                } catch (NumberFormatException ignored) {
+                                }
                             }
                         }
                     }
@@ -1100,14 +1108,10 @@ public class AutoDataNetScraper {
         }
 
         String finalOutput = sb.toString().trim();
+        log.debug("[AutoDataNet] fetchSchedaTecnica: collected {} rows", savedRows.size());
 
-        if (foundFrom == null || foundTo == null) {
-            if (foundFrom == null) foundFrom = findYearInDocByLabels(doc, new String[]{"inizio anno", "inizio"});
-            if (foundTo == null)   foundTo   = findYearInDocByLabels(doc, new String[]{"fine anno", "fine"});
-        }
-
-        if (foundFrom != null || foundTo != null || finalOutput.length() > 120) {
-            return Optional.of(new SchedaData(finalOutput, foundFrom, foundTo));
+        if (annoInizioModello != null || annoFineModello != null || finalOutput.length() > 120) {
+            return Optional.of(new SchedaData(finalOutput, annoInizioModello, annoFineModello));
         }
 
         return Optional.empty();

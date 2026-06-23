@@ -136,7 +136,7 @@ public class CalcoloSostenibilitaService {
                 m.getModello().getMarca().getNome(),
                 m.getModello().getNome(),
                 m.getNomeMotore(),
-                m.getAnnoProduzione());
+                m.getAnnoProduzioneM());
 
         log.debug("Calcolo completato: {} → totale={}€/mese ({}%)", label, totMensile, percReddito);
 

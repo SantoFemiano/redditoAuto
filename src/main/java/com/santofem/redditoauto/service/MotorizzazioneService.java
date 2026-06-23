@@ -166,6 +166,6 @@ public class MotorizzazioneService {
             m.getModello().getMarca().getNome(),
             m.getModello().getNome(),
             m.getNomeMotore(),
-            m.getAnnoProduzione());
+            m.getAnnoProduzioneM());
     }
 }

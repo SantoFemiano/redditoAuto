@@ -83,7 +83,7 @@ class AutoExtractionOrchestratorTest {
 
         responseDTO = MotorizzazioneResponseDTO.builder()
             .id(10L).marca(MARCA).modello(MODELLO)
-            .nomeMotore(MOTORE).annoProduzione(ANNO)
+            .nomeMotore(MOTORE).annoProduzioneM(ANNO)
             .build();
     }
 

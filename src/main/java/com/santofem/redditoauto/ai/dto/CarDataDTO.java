@@ -2,6 +2,7 @@ package com.santofem.redditoauto.ai.dto;
 
 import com.fasterxml.jackson.annotation.JsonPropertyDescription;
 import dev.langchain4j.model.output.structured.Description;
+import jakarta.persistence.Column;
 
 
 /**
@@ -21,20 +22,26 @@ import dev.langchain4j.model.output.structured.Description;
              "Tutti i campi non trovati nel testo devono essere null.")
 public record CarDataDTO(
 
-    @JsonPropertyDescription("Marca del veicolo, es. 'Volkswagen', 'BMW', 'Toyota'")
+        @JsonPropertyDescription("Marca del veicolo, es. 'Volkswagen', 'BMW', 'Toyota'")
     String marca,
 
-    @JsonPropertyDescription("Modello del veicolo, es. 'Golf', 'Serie 3', 'Yaris'")
+        @JsonPropertyDescription("Modello del veicolo, es. 'Golf', 'Serie 3', 'Yaris'")
     String modello,
 
-    @JsonPropertyDescription("Nome completo della motorizzazione inclusa potenza e cambio, es. '2.0 TDI 150 CV DSG'")
+        @JsonPropertyDescription("Nome completo della motorizzazione inclusa potenza e cambio, es. '2.0 TDI 150 CV DSG'")
     String nomeMotore,
 
-    @JsonPropertyDescription("Anno di produzione o immatricolazione come intero, es. 2022")
+        @JsonPropertyDescription("Anno di produzione del Modello o immatricolazione come intero, es. 2022")
     Integer annoProduzione,
 
-    @JsonPropertyDescription("Anno di fine produzione come intero, es. 2025. null se il modello è ancora in produzione.")
+        @JsonPropertyDescription("Anno di fine produzione come intero del Modello, es. 2025. null se il modello è ancora in produzione.")
     Integer annoFineProduzione,
+
+        @JsonPropertyDescription("Anno di produzione della motorizzazione come intero, es. 2022")
+        Integer annoProduzioneM,
+
+        @JsonPropertyDescription("Anno di fine produzione della motorizzazione come intero, es.2022")
+        Integer annoFineProduzioneM,
 
     @JsonPropertyDescription(
         "Tipo carburante. Usa ESATTAMENTE uno di questi valori: " +

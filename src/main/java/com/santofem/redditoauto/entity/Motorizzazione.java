@@ -42,10 +42,10 @@ public class Motorizzazione {
     private String nomeMotore;
 
     @Column(name = "anno_produzione", nullable = false)
-    private Integer annoProduzione;
+    private Integer annoProduzioneM;
 
     @Column(name="anno_fine_produzione",nullable = true)
-    private Integer annoFineProduzione;
+    private Integer annoFineProduzioneM;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "tipo_carburante", nullable = false, length = 30)

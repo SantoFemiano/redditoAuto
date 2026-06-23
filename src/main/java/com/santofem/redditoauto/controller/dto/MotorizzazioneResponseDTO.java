@@ -29,8 +29,10 @@ public class MotorizzazioneResponseDTO {
     private String marca;
     private String modello;
     private String nomeMotore;
-    private int    annoProduzione;
-    private int    annoFineProduzione;
+    private int annoProduzione;
+    private int annoFineProduzione;
+    private int annoProduzioneM;
+    private int annoFineProduzioneM;
 
     // ── Motorizzazione ────────────────────────────────────────────────────────
     private String  tipoCarburante;

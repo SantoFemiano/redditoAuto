@@ -53,7 +53,7 @@ class MotorizzazioneServiceTest {
 
         golfTdiDTO = MotorizzazioneResponseDTO.builder()
             .id(10L).marca("Volkswagen").modello("Golf")
-            .nomeMotore("2.0 TDI 150 CV").annoProduzione(2022)
+            .nomeMotore("2.0 TDI 150 CV").annoProduzioneM(2022)
             .potenzaKw(110).tipoCarburante("DIESEL")
             .build();
     }

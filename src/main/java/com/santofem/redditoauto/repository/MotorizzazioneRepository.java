@@ -28,7 +28,7 @@ public interface MotorizzazioneRepository extends JpaRepository<Motorizzazione, 
         JOIN mo.marca ma
         WHERE LOWER(ma.nome) = LOWER(:marca)
           AND LOWER(mo.nome) = LOWER(:modello)
-          AND m.annoProduzione = :anno
+          AND m.annoProduzioneM = :anno
         """)
     List<Motorizzazione> findByMarcaModelloAnno(
             @Param("marca") String marca,

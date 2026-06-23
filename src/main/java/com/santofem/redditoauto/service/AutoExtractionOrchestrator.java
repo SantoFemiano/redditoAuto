@@ -230,6 +230,7 @@ public class AutoExtractionOrchestrator {
 
         return new CarDataDTO(
             marca, modello, motore, anno, raw.annoFineProduzione(),
+            raw.annoProduzioneM(),raw.annoFineProduzioneM(),
             raw.tipoCarburante(), raw.tipoCambio(),
             raw.potenzaKw(), raw.potenzaCv(), raw.cilindrataCC(),
             raw.consumoMedioLitri100km(), raw.consumoUrbanoLitri100km(), raw.consumoExtraurbanoLitri100km(),
@@ -360,10 +361,10 @@ public class AutoExtractionOrchestrator {
             Modello.ModelloBuilder builder = Modello.builder()
                     .marca(marca)
                     .nome(capitalizza(dto.modello()))
-                    .annoInizio(dto.annoProduzione());
+                    // FIX: Forza l'uso dell'annoFrom dello scraper per l'entità Modello
+                    .annoInizio(annoFrom != null ? annoFrom : dto.annoProduzione());
 
             if (annoTo != null) {
-                // 2099 indica intervallo aperto; persistiamo NULL per modello ancora in produzione
                 if (annoTo >= 2099) builder.annoFine(null);
                 else builder.annoFine(annoTo);
             }

@@ -29,7 +29,7 @@ class MotorizzazioneControllerTest {
             .marca("Volkswagen")
             .modello("Golf")
             .nomeMotore("2.0 TDI 150CV")
-            .annoProduzione(2022)
+            .annoProduzioneM(2022)
             .build();
     }
 
