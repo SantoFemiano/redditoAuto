@@ -32,8 +32,17 @@ public class MultiSiteScraperResult {
     /** Modello inferito dalla pagina (hint per l'AI). Null se non rilevato. */
     private final String modelloHint;
 
-    /** Anno inferito dalla pagina (hint per l'AI). 0 se non rilevato. */
+    /**
+     * Anno inferito dalla pagina (hint per l'AI). 0 se non rilevato.
+     * @deprecated Usa {@link #annoInizioModello} per maggiore precisione.
+     */
     private final int annoHint;
+
+    /** Anno inizio produzione del MODELLO (dal breadcrumb, es. "Juke II (2019 - present)"). 0 se non rilevato. */
+    private final int annoInizioModello;
+
+    /** Anno fine produzione del MODELLO (dal breadcrumb). 0 se non rilevato (= ancora in produzione). */
+    private final int annoFineModello;
 
     /** Nome del sito sorgente (es. "auto-data.net", "autoscout24.it") */
     private final String siteNome;

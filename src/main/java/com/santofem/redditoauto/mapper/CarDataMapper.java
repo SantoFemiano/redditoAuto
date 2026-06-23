@@ -70,6 +70,8 @@ public class CarDataMapper {
             .marca(m.getModello().getMarca().getNome())
             .modello(m.getModello().getNome())
             .nomeMotore(m.getNomeMotore())
+                .annoProduzione(m.getModello().getAnnoInizio())
+                .annoFineProduzione(m.getModello().getAnnoFine())
                 .annoProduzioneM(m.getAnnoProduzioneM())
                 .annoFineProduzioneM(m.getAnnoFineProduzioneM())
             .tipoCarburante(m.getTipoCarburante() != null ? m.getTipoCarburante().name() : null)

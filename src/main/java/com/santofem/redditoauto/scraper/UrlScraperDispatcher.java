@@ -5,7 +5,6 @@ import com.santofem.redditoauto.scraper.sites.AutoItScraper;
 import com.santofem.redditoauto.scraper.sites.AutoScout24Scraper;
 import com.santofem.redditoauto.scraper.sites.AutomotoItScraper;
 import com.santofem.redditoauto.scraper.sites.InfomotoriScraper;
-import com.santofem.redditoauto.scraper.sites.MotoristItalyScraper;
 import com.santofem.redditoauto.scraper.sites.QuattroruotesScraper;
 import com.santofem.redditoauto.scraper.sites.SubitoItScraper;
 import lombok.RequiredArgsConstructor;
@@ -39,7 +38,7 @@ public class UrlScraperDispatcher {
 
     private final AutoDataNetUrlScraper  autoDataNetUrlScraper;
     private final AutoScout24Scraper     autoScout24Scraper;
-    private final MotoristItalyScraper   motoristItalyScraper;
+
     private final QuattroruotesScraper   quattroruotesScraper;
     private final AutomotoItScraper      automotoItScraper;
     private final InfomotoriScraper      infomotoriScraper;
@@ -68,7 +67,6 @@ public class UrlScraperDispatcher {
         List<UrlScraperStrategy> strategies = List.of(
                 autoDataNetUrlScraper,
                 autoScout24Scraper,
-                motoristItalyScraper,
                 quattroruotesScraper,
                 automotoItScraper,
                 infomotoriScraper,

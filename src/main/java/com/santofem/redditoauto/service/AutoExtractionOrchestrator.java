@@ -165,7 +165,11 @@ public class AutoExtractionOrchestrator {
         // 2. Costruisce il contesto di hint per guidare l'AI
         String marca   = scraped.getMarcaHint()   != null ? scraped.getMarcaHint()   : "sconosciuta";
         String modello = scraped.getModelloHint() != null ? scraped.getModelloHint() : "sconosciuto";
-        String annoStr = scraped.getAnnoHint()    > 0     ? String.valueOf(scraped.getAnnoHint()) : "0";
+
+        // Anno inizio modello come contesto per l'AI
+        String annoStr = scraped.getAnnoInizioModello() > 0
+                ? String.valueOf(scraped.getAnnoInizioModello())
+                : "0";
 
         log.info("[Orchestratore] URL scraping riuscito da '{}': {} chars, prezzo={} EUR, hint: {} {} {}",
                 scraped.getSiteNome(), scraped.getTesto().length(),
@@ -181,10 +185,12 @@ public class AutoExtractionOrchestrator {
         // 5. Fonte dati reale dal sito riconosciuto
         String fonteDati = "scraping:" + scraped.getSiteNome() + ":" + url;
 
-        // 6. Persisti e ottieni il DTO di risposta
-        // Se lo scraper ha fornito un hint anno, usalo come from/to
-        Integer hintFrom = scraped.getAnnoHint() > 0 ? scraped.getAnnoHint() : null;
-        Integer hintTo = hintFrom;
+        // 6. Anno inizio/fine del MODELLO (dal breadcrumb scraper) → usati per persistiDto
+        Integer hintFrom = scraped.getAnnoInizioModello() > 0 ? scraped.getAnnoInizioModello() : null;
+        Integer hintTo   = scraped.getAnnoFineModello()   > 0 ? scraped.getAnnoFineModello()   : null;
+
+        log.info("[Orchestratore] hint modello: annoInizio={} annoFine={}", hintFrom, hintTo);
+
         MotorizzazioneResponseDTO response = persistiDto(dto, fonteDati, hintFrom, hintTo);
 
         // 7. Propaga il prezzo trovato dallo scraper (più affidabile dell'AI)

@@ -989,7 +989,8 @@ public class AutoDataNetScraper {
     //  LIVELLO 5 — SCHEDA TECNICA
     // ══════════════════════════════════════════════
 
-    private static record SchedaData(String testo, Integer annoFrom, Integer annoTo) {}
+    private static record SchedaData(String testo, Integer annoFrom, Integer annoTo,
+                                     Integer annoInizioModello, Integer annoFineModello) {}
 
     private Optional<SchedaData> fetchSchedaTecnica(String url) throws IOException {
         Document doc = fetch(url);
@@ -1110,11 +1111,9 @@ public class AutoDataNetScraper {
         String finalOutput = sb.toString().trim();
         log.debug("[AutoDataNet] fetchSchedaTecnica: collected {} rows", savedRows.size());
 
-        if (annoInizioModello != null || annoFineModello != null || finalOutput.length() > 120) {
-            return Optional.of(new SchedaData(finalOutput, annoInizioModello, annoFineModello));
-        }
+        return Optional.of(new SchedaData(finalOutput, foundFrom, foundTo,
+                annoInizioModello, annoFineModello));
 
-        return Optional.empty();
     }
 
     /** Cerca elementi contenenti label indicate e prova ad estrarre anno/anno-month dal loro contesto */
